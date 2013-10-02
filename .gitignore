@@ -1,0 +1,6 @@
+*.o
+eyecam
+
+CMakeCache.txt
+CMakeFiles
+cmake_install.cmake
