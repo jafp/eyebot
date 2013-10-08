@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <netdb.h>
+#include <assert.h>	
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -32,6 +33,11 @@ static unsigned long frame_counter;
 static unsigned int image_size;
 static unsigned char * buffer;
 static int socket_fd;
+
+/**
+ * Function prototypes
+ */
+static int update_loop(int error, int x, int y, int mass);
 
 
 /**
@@ -60,6 +66,10 @@ static int sendall(int s, char *buf, int *len)
 
 /**
  * Callback fired when a frame is ready.
+ * 
+ * \param ctx Pointer to the current camera context
+ * \param frame Pointer to the frame data (planar image data)
+ * \param length The of the frame data (in bytes, not pixels)
  */
 static void frame_callback(struct cam_ctx * ctx, void * frame, int length)
 {
@@ -72,6 +82,19 @@ static void frame_callback(struct cam_ctx * ctx, void * frame, int length)
 	
 	ptr = (unsigned char *) frame;
 
+	//
+	// Image processing part of the code!
+	//
+	// The following steps are done:
+	//  - Every pixel below a curtain gray scale value are "marked" as the line,
+	//    and the rest of the pixels are marked as the floor. The line pixels
+	//	  are colored black, and the rest white.
+	//
+	//  - The X and Y values of each pixel is added together, and the total
+	// 	  number of "line pixels" are counted.
+	//
+	//  - ...
+
 	for (i = 0; i < IMG_SIZE; i++)
 	{
 		v = (*ptr);
@@ -81,6 +104,8 @@ static void frame_callback(struct cam_ctx * ctx, void * frame, int length)
 
 		if (v == 0)
 		{
+			// Calculate the X,Y coordinate from the current array position.
+			// TODO: Remove hardcoded image size values
 			x += i % 320;
 			y += i / 320;
 			count++;
@@ -89,6 +114,8 @@ static void frame_callback(struct cam_ctx * ctx, void * frame, int length)
 		ptr += 2;
 	}
 
+	// Calculate the average X,Y position, and then the "error", which is the
+	// difference of the X position and the center of the image.
 	if (count > 0)
 	{
 		x = x / count;
@@ -96,33 +123,73 @@ static void frame_callback(struct cam_ctx * ctx, void * frame, int length)
 		error = 160 - x;
 	}
 
-	// Transmit every 3rd frame over sockets
-	if (frame_counter % 3 == 0)
+	// Transmit every 4rd frame over sockets.
+	// This is 15 frames per second when we are capturing
+	// 60 frames per second from the camera.
+	if (frame_counter % 4 == 0)
 	{
-		send(socket_fd, &x, sizeof(x), 0);
-		send(socket_fd, &y, sizeof(y), 0);
+		i = send(socket_fd, &x, sizeof(x), 0);
+		if (i == -1)
+		{
+			perror("Could not send x");
+			return;
+		}
+
+		i = send(socket_fd, &y, sizeof(y), 0);
+		if (i == -1)
+		{
+			perror("Could not send y");
+			return;
+		}
 
 		int length = IMG_SIZE;
 		if (sendall(socket_fd, buffer, &length) == -1)
 		{
-			printf("error...");
-			exit(1);
+			perror("Could not send frame buffer");
+			return;
 		}
-		//printf("Sent: %d bytes of image data\n", length);
+
+		// This should teoretically never fails, but...
+		assert(length == IMG_SIZE);
 	}
 
 	frame_counter++;
+
+	// Dispatch the updating to another function
+	update_loop(error, x, y, count);
+}
+
+/**
+ * Update loop callback. Called whenever a new image has been processed.
+ * From this point, it's all about calculating new speeds for the motors,
+ * and transmitting the updates to them.
+ * 
+ * \param error The error calculated from the image (diff. in X coordinate)
+ * \param x The calculated X position of the center mass of the line
+ * \param x The calculated Y position of the center mass of the line
+ * \param mass The number of pixels identified as the line
+ */
+static int update_loop(int error, int x, int y, int mass)
+{
+	// TODO! 
+	// Read tacho from motor
+	// Do magic
+	// Tell motors new speed
 }
 
 /**
  * SIGINT signal handler.
+ * 
+ * \param signal Signal number
  */
 static void sigint_handler(int signal)
 {
 	cam_end_loop(&ctx);
 }
 
-
+/**
+ * Main entry point.
+ */
 int main(int argc, char ** argv)
 {
 	struct addrinfo hints, *res;
@@ -143,6 +210,9 @@ int main(int argc, char ** argv)
 	// ----------------------------------------
 	// Sockets
 	// ----------------------------------------
+
+	// TODO: Refactor all the networking/socket stuff out of the main file.
+	// This is mostly relevant during debugging and testing.
 
 	socket_fd = socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
     if(socket_fd == -1)
@@ -181,7 +251,8 @@ int main(int argc, char ** argv)
 	cam_stop_capturing(&ctx);
 	cam_uninit(&ctx);
 
-
+	// Print some statistics.
+	// TODO: Calculate and show some statistics while running?
 	printf("\nActual fps: %f\n", cam_get_measured_fps(&ctx));
 	printf("Done.\n\n");
 

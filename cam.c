@@ -82,60 +82,6 @@ static int read_frame(struct cam_ctx * ctx)
     return 1;
 }
 
-void cam_end_loop(struct cam_ctx * ctx)
-{
-	ctx->run = 0;
-}
-
-void cam_loop(struct cam_ctx * ctx)
-{
-    unsigned int count;
-
-    ctx->run = 1;
-    ctx->frame_count = 0;
-    gettimeofday(&(ctx->start), NULL);
-
-    while (ctx->run) 
-    {
-        for (;;) 
-        {
-            fd_set fds;
-            struct timeval tv;
-            int r;
-
-            FD_ZERO(&fds);
-            FD_SET(ctx->fd, &fds);
-
-            /* Timeout. */
-            tv.tv_sec = 2;
-            tv.tv_usec = 0;
-
-            r = select(ctx->fd + 1, &fds, NULL, NULL, &tv);
-
-            if (-1 == r) 
-            {
-                if (EINTR == errno)
-                        continue;
-                errno_exit("select");
-            }
-
-            if (0 == r) 
-            {
-                fprintf(stderr, "select timeout\n");
-                exit(EXIT_FAILURE);
-            }
-
-            if (read_frame(ctx))
-            {
-                break;
-            }
-            /* EAGAIN - continue select loop. */
-        }
-    }
-
-    gettimeofday(&(ctx->end), NULL);
-}
-
 static void stop_capturing(struct cam_ctx * ctx)
 {
     enum v4l2_buf_type type;
@@ -359,6 +305,60 @@ void cam_stop_capturing(struct cam_ctx * ctx)
 {
 	stop_capturing(ctx);
     
+}
+
+void cam_end_loop(struct cam_ctx * ctx)
+{
+    ctx->run = 0;
+}
+
+void cam_loop(struct cam_ctx * ctx)
+{
+    unsigned int count;
+
+    ctx->run = 1;
+    ctx->frame_count = 0;
+    gettimeofday(&(ctx->start), NULL);
+
+    while (ctx->run) 
+    {
+        for (;;) 
+        {
+            fd_set fds;
+            struct timeval tv;
+            int r;
+
+            FD_ZERO(&fds);
+            FD_SET(ctx->fd, &fds);
+
+            /* Timeout. */
+            tv.tv_sec = 2;
+            tv.tv_usec = 0;
+
+            r = select(ctx->fd + 1, &fds, NULL, NULL, &tv);
+
+            if (-1 == r) 
+            {
+                if (EINTR == errno)
+                        continue;
+                errno_exit("select");
+            }
+
+            if (0 == r) 
+            {
+                fprintf(stderr, "select timeout\n");
+                exit(EXIT_FAILURE);
+            }
+
+            if (read_frame(ctx))
+            {
+                break;
+            }
+            /* EAGAIN - continue select loop. */
+        }
+    }
+
+    gettimeofday(&(ctx->end), NULL);
 }
 
 double cam_get_measured_fps(struct cam_ctx * ctx)

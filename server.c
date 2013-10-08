@@ -34,6 +34,7 @@ static Window window;
 
 // Buffer for the image displayed on in the window
 static unsigned char * img_buffer;//[N_IMG_BYTES];
+static unsigned char * img_disp_buffer;
 // Buffer used when reading the image over socket
 static unsigned char * read_buffer;//[WIDTH * HEIGHT + PADDING];
 
@@ -124,6 +125,7 @@ int main(int argc, char* argv[])
     img_buffer = malloc(SIZE * CHANNELS);
     read_buffer = malloc(SIZE + PADDING);
 
+    unsigned char b[4096];
 
     display = XOpenDisplay(NULL);
     visual = DefaultVisual(display, 0);
@@ -138,10 +140,11 @@ int main(int argc, char* argv[])
     XMapWindow(display, window);
     XFlush(display);
 
-    memset(img_buffer, 255, 320*240*4);
-    image = XCreateImage(display, visual, 24, ZPixmap, 0, img_buffer, 320, 240, 32, 0);
-    XPutImage(display, window, DefaultGC(display, 0), image, 0, 0, 0, 0, 320, 240);
+    image = NULL;
 
+    //memset(img_buffer, 255, 320*240*4);
+    //image = XCreateImage(display, visual, 24, ZPixmap, 0, img_buffer, 320, 240, 32, 0);
+    //XPutImage(display, window, DefaultGC(display, 0), image, 0, 0, 0, 0, 320, 240);
 
     int hSocket,hServerSocket;  /* handle to socket */
     struct hostent* pHostInfo;   /* holds info about a machine */
@@ -150,13 +153,13 @@ int main(int argc, char* argv[])
     char pBuffer[BUFFER_SIZE];
     int nHostPort = 23000;
 
-    printf("\nStarting server");
-    printf("\nMaking socket");
+    printf("Starting server\n");
+    printf("Making socket\n");
 
     hServerSocket=socket(AF_INET,SOCK_STREAM,0);
     if(hServerSocket == SOCKET_ERROR)
     {
-        printf("\nCould not make a socket\n");
+        printf("Could not make a socket\n");
         return 0;
     }
 
@@ -164,30 +167,29 @@ int main(int argc, char* argv[])
     Address.sin_port=htons(nHostPort);
     Address.sin_family=AF_INET;
 
-    printf("\nBinding to port %d",nHostPort);
+    printf("Binding to port %d\n",nHostPort);
     if(bind(hServerSocket,(struct sockaddr*)&Address,sizeof(Address)) == SOCKET_ERROR)
     {
-        printf("\nCould not connect to host\n");
+        printf("Could not connect to host\n");
         return 0;
     }
 
     getsockname( hServerSocket, (struct sockaddr *) &Address,(socklen_t *)&nAddressSize);
-    printf("opened socket as fd (%d) on port (%d) for stream i/o\n",hServerSocket, ntohs(Address.sin_port) );
-    printf("\nMaking a listen queue of %d elements",QUEUE_SIZE);
+    printf("Opened socket as fd (%d) on port (%d) for stream i/o\n",hServerSocket, ntohs(Address.sin_port) );
+    printf("Making a listen queue of %d elements\n",QUEUE_SIZE);
 
     if(listen(hServerSocket,QUEUE_SIZE) == SOCKET_ERROR)
     {
-        printf("\nCould not listen\n");
+        printf("Could not listen\n");
         return 0;
     }
 
     for(;;)
     {
-        printf("\nWaiting for a connection\n");
-        /* get the connected socket */
-        hSocket=accept(hServerSocket,(struct sockaddr*)&Address,(socklen_t *)&nAddressSize);
+        printf("Waiting for a connection\n");
+        hSocket = accept(hServerSocket,(struct sockaddr*)&Address,(socklen_t *)&nAddressSize);
 
-        printf("\nGot a connection");
+        printf("Got a connection\n");
     
         while (1)
         {               
@@ -198,34 +200,58 @@ int main(int argc, char* argv[])
             read(hSocket, &x, sizeof(x));
             read(hSocket, &y, sizeof(y));
 
-            while ((bytes_read = read(hSocket, read_buffer + total, 4096)) > 0)
+            // Clear the read buffer
+            memset(read_buffer, 0, SIZE);
+
+            //
+            // Read the 76800 bytes a frame consist of
+            //
+            while ((bytes_read = read(hSocket, b, 2024)) > 0)
             {
+                // End if the socket has been closed
                 if (bytes_read == -1)
                 {
                     return 1;
                 }
 
-                //printf("received: %d\n", bytes_read);
+                memcpy(read_buffer + total, b, bytes_read);
                 total += bytes_read;
-                // one more go..
 
+                // if (total > 76800)
+                // {
+                //     printf("Too much has been read, or too much has been sent actually??\n");
+                //     printf("%d bytes read by last read() call\n", bytes_read);
+                    
+                //     if (bytes_read < 1024)
+                //     {
+                //         printf("Less than buffer size read, ignore frame.\n");
+                //         break;
+                //     }
+                // }
+                // else if (total == 76800)
                 if (total >= 76800)
                 {
                     copy_to_x_buffer(read_buffer, total);
                     draw_center_point(x, y);
 
-                    //image = XCreateImage(display, visual, 24, ZPixmap, 0, img_buffer, 320, 240, 32, 0);
-                    XPutImage(display, window, DefaultGC(display, 0), image, 0, 0, 0, 0, 320, 240);
+                    if (image != NULL)
+                    {
+                        XDestroyImage(image);
+                    }
 
+                    // Allocate a new buffer for next frame. 
+                    // The old one is freed by XDestroyImage
+                    img_disp_buffer = (unsigned char *) malloc(SIZE * CHANNELS);
+                    memcpy(img_disp_buffer, img_buffer, SIZE * CHANNELS);
+
+                    image = XCreateImage(display, visual, 24, ZPixmap, 0, img_disp_buffer, 320, 240, 32, 0);
+                    XPutImage(display, window, DefaultGC(display, 0), image, 0, 0, 0, 0, 320, 240);
 
                     break;
                 }
             }
 
-            //while (read(hSocket, buf, 4096) > 0) {}
-
-            // printf("read: %ld\n", total);
-//
+            // Nothing has been read at all
             if (total == 0)
             {
                 break;

@@ -9,8 +9,8 @@
 struct cam_ctx;
 
 struct __buffer {
-        void   *start;
-        size_t  length;
+    void   *start;
+    size_t  length;
 };
 
 struct cam_config {
