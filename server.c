@@ -141,11 +141,7 @@ int main(int argc, char* argv[])
     XFlush(display);
 
     image = NULL;
-
-    //memset(img_buffer, 255, 320*240*4);
-    //image = XCreateImage(display, visual, 24, ZPixmap, 0, img_buffer, 320, 240, 32, 0);
-    //XPutImage(display, window, DefaultGC(display, 0), image, 0, 0, 0, 0, 320, 240);
-
+    
     int hSocket,hServerSocket;  /* handle to socket */
     struct hostent* pHostInfo;   /* holds info about a machine */
     struct sockaddr_in Address; /* Internet socket address stuct */
