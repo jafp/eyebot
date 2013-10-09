@@ -2,4 +2,5 @@
 cmake_minimum_required(VERSION 2.8)
 
 project(eyecam)
-add_executable(eyecam cam.c main.c)
+link_libraries(pthread)
+add_executable(eyecam i2c.c broadcast.c cam.c main.c)

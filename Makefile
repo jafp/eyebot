@@ -111,6 +111,30 @@ eyecam/fast:
 	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/build
 .PHONY : eyecam/fast
 
+broadcast.o: broadcast.c.o
+.PHONY : broadcast.o
+
+# target to build an object file
+broadcast.c.o:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/broadcast.c.o
+.PHONY : broadcast.c.o
+
+broadcast.i: broadcast.c.i
+.PHONY : broadcast.i
+
+# target to preprocess a source file
+broadcast.c.i:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/broadcast.c.i
+.PHONY : broadcast.c.i
+
+broadcast.s: broadcast.c.s
+.PHONY : broadcast.s
+
+# target to generate assembly for a file
+broadcast.c.s:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/broadcast.c.s
+.PHONY : broadcast.c.s
+
 cam.o: cam.c.o
 .PHONY : cam.o
 
@@ -134,6 +158,30 @@ cam.s: cam.c.s
 cam.c.s:
 	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/cam.c.s
 .PHONY : cam.c.s
+
+i2c.o: i2c.c.o
+.PHONY : i2c.o
+
+# target to build an object file
+i2c.c.o:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/i2c.c.o
+.PHONY : i2c.c.o
+
+i2c.i: i2c.c.i
+.PHONY : i2c.i
+
+# target to preprocess a source file
+i2c.c.i:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/i2c.c.i
+.PHONY : i2c.c.i
+
+i2c.s: i2c.c.s
+.PHONY : i2c.s
+
+# target to generate assembly for a file
+i2c.c.s:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/i2c.c.s
+.PHONY : i2c.c.s
 
 main.o: main.c.o
 .PHONY : main.o
@@ -168,9 +216,15 @@ help:
 	@echo "... edit_cache"
 	@echo "... eyecam"
 	@echo "... rebuild_cache"
+	@echo "... broadcast.o"
+	@echo "... broadcast.i"
+	@echo "... broadcast.s"
 	@echo "... cam.o"
 	@echo "... cam.i"
 	@echo "... cam.s"
+	@echo "... i2c.o"
+	@echo "... i2c.i"
+	@echo "... i2c.s"
 	@echo "... main.o"
 	@echo "... main.i"
 	@echo "... main.s"

@@ -12,6 +12,10 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
+#include <pthread.h>
+
+#include "i2c.h"
+#include "broadcast.h"
 #include "cam.h"
 
 #define SERVER_HOSTNAME		"10.42.0.1"
@@ -28,7 +32,7 @@
 #define FLOOR				255
 #define LINE				0
 
-static struct cam_ctx ctx;
+static struct cam_ctx * ctx;
 static unsigned long frame_counter;
 static unsigned int image_size;
 static unsigned char * buffer;
@@ -39,30 +43,6 @@ static int socket_fd;
  */
 static int update_loop(int error, int x, int y, int mass);
 
-
-/**
- * Send a huge buffer over several send() system calls. 
- */
-static int sendall(int s, char *buf, int *len)
-{
-    int total = 0;        // how many bytes we've sent
-    int bytesleft = *len; // how many we have left to send
-    int n;
-
-    while(total < *len) 
-    {
-        n = send(s, buf + total, bytesleft, 0);
-        if (n == -1) 
-        { 
-        	break; 
-        }
-        total += n;
-        bytesleft -= n;
-    }
-
-    *len = total; // return number actually sent here
-    return n == -1 ? -1 : 0; // return -1 on failure, 0 on success
-}
 
 /**
  * Callback fired when a frame is ready.
@@ -128,29 +108,7 @@ static void frame_callback(struct cam_ctx * ctx, void * frame, int length)
 	// 60 frames per second from the camera.
 	if (frame_counter % 4 == 0)
 	{
-		i = send(socket_fd, &x, sizeof(x), 0);
-		if (i == -1)
-		{
-			perror("Could not send x");
-			return;
-		}
-
-		i = send(socket_fd, &y, sizeof(y), 0);
-		if (i == -1)
-		{
-			perror("Could not send y");
-			return;
-		}
-
-		int length = IMG_SIZE;
-		if (sendall(socket_fd, buffer, &length) == -1)
-		{
-			perror("Could not send frame buffer");
-			return;
-		}
-
-		// This should teoretically never fails, but...
-		assert(length == IMG_SIZE);
+		broadcast_send(x, y, error, buffer);
 	}
 
 	frame_counter++;
@@ -184,7 +142,13 @@ static int update_loop(int error, int x, int y, int mass)
  */
 static void sigint_handler(int signal)
 {
-	cam_end_loop(&ctx);
+	cam_end_loop(ctx);
+}
+
+static void * main_thread_fn(void * ptr)
+{
+	cam_loop(ctx);
+	pthread_exit(0);
 }
 
 /**
@@ -192,69 +156,67 @@ static void sigint_handler(int signal)
  */
 int main(int argc, char ** argv)
 {
+	pthread_t main_thread, shell_thread;
 	struct addrinfo hints, *res;
 
-	// Configuration
-	ctx.config.frame_cb = frame_callback;
-	ctx.config.width = WIDTH;
-	ctx.config.height = HEIGHT;
-	ctx.config.fps = FPS;
-	ctx.dev = DEV;
+	ctx = (struct cam_ctx *) malloc(sizeof(struct cam_ctx));
+	if (ctx == NULL)
+	{
+		// We are out of memory...this never happens!
+	}
+
+	// Camera configuration
+	ctx->config.frame_cb = frame_callback;
+	ctx->config.width = WIDTH;
+	ctx->config.height = HEIGHT;
+	ctx->config.fps = FPS;
+	ctx->dev = DEV;
 
 	frame_counter = 0;
 	buffer = malloc(IMG_SIZE);
 
 	printf("\n=== Eyecam ===\n");
-	printf("Config: w: %d, h: %d, fps (expected): %d\n", ctx.config.width, ctx.config.height, ctx.config.fps);
+	printf("Config: w: %d, h: %d, fps (expected): %d\n", ctx->config.width, ctx->config.height, ctx->config.fps);
 
-	// ----------------------------------------
-	// Sockets
-	// ----------------------------------------
 
-	// TODO: Refactor all the networking/socket stuff out of the main file.
-	// This is mostly relevant during debugging and testing.
+	// Open i2c bus (by internally opening the i2c device driver)
+	//if (i2c_bus_open() < 0)
+	//{
+	//	printf("Failed opening I2C bus, exiting...\n");
+	//	exit(-1);
+	//}
 
-	socket_fd = socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
-    if(socket_fd == -1)
-    {
-        printf("Could not make a socket\n");
-        return 1;
-    }
-
-	memset(&hints, 0, sizeof hints);
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	getaddrinfo(SERVER_HOSTNAME, SERVER_PORT, &hints, &res);
-
-	if (connect(socket_fd, res->ai_addr, res->ai_addrlen) == -1)
-	{
-		printf("Failed to connect\n");
-		return 1;
-	}
-
-	// ----------------------------------------
-	// End Sockets
-	// ----------------------------------------
 
 	// Catch CTRL-C signal and end looping
 	signal(SIGINT, sigint_handler);
 
 	// Open camera and start capturing
-	cam_init(&ctx);
-	cam_start_capturing(&ctx);
+	cam_init(ctx);
+	cam_start_capturing(ctx);
+	
+	// Open TCP server socket, and start listening for connections	
+	broadcast_init();
+	broadcast_start();
 
-	// Loop forever - or till the loop is stopped by calling `cam_end_loop`.
-	// `cam_end_loop`is called from a SIGINT signal handler, which means
-	// the image capture can by stopped by send CTRL-C in the terminal.
-	cam_loop(&ctx);
+	// Create the main thread
+	if (pthread_create(&main_thread, NULL, main_thread_fn, ctx) < 0)
+	{
+		perror("pthread_create");
+		exit(-1);
+	}
 
-	cam_stop_capturing(&ctx);
-	cam_uninit(&ctx);
+	// Wait for the main thread and shell thread to finish
+	pthread_join(main_thread, NULL);
+	// TODO wait for shell thread
+	
+	cam_stop_capturing(ctx);
+	cam_uninit(ctx);
 
 	// Print some statistics.
 	// TODO: Calculate and show some statistics while running?
-	printf("\nActual fps: %f\n", cam_get_measured_fps(&ctx));
+	printf("\nActual fps: %f\n", cam_get_measured_fps(ctx));
 	printf("Done.\n\n");
 
 	return 0;
 }
+

@@ -12,6 +12,10 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 
+#define SERVER_PORT "24000"
+#define SERVER_HOSTNAME "10.42.0.25"
+
+
 #define WIDTH 			320
 #define HEIGHT 			240
 #define CHANNELS 		4
@@ -117,7 +121,11 @@ static void draw_center_point(int x, int y)
     }
 }
 
-
+static exitp(const char * msg)
+{
+    perror(msg);
+    exit(errno);
+}
 
 int main(int argc, char* argv[])
 {
@@ -141,128 +149,128 @@ int main(int argc, char* argv[])
     XFlush(display);
 
     image = NULL;
-    
-    int hSocket,hServerSocket;  /* handle to socket */
-    struct hostent* pHostInfo;   /* holds info about a machine */
-    struct sockaddr_in Address; /* Internet socket address stuct */
-    int nAddressSize=sizeof(struct sockaddr_in);
-    char pBuffer[BUFFER_SIZE];
-    int nHostPort = 23000;
 
-    printf("Starting server\n");
-    printf("Making socket\n");
-
-    hServerSocket=socket(AF_INET,SOCK_STREAM,0);
-    if(hServerSocket == SOCKET_ERROR)
+    struct addrinfo hints, *res;
+    int socket_fd = socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+    if(socket_fd == -1)
     {
         printf("Could not make a socket\n");
-        return 0;
+        return 1;
     }
 
-    Address.sin_addr.s_addr=INADDR_ANY;
-    Address.sin_port=htons(nHostPort);
-    Address.sin_family=AF_INET;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    getaddrinfo(SERVER_HOSTNAME, SERVER_PORT, &hints, &res);
 
-    printf("Binding to port %d\n",nHostPort);
-    if(bind(hServerSocket,(struct sockaddr*)&Address,sizeof(Address)) == SOCKET_ERROR)
+    if (connect(socket_fd, res->ai_addr, res->ai_addrlen) == -1)
     {
-        printf("Could not connect to host\n");
-        return 0;
+        printf("Failed to connect\n");
+        return 1;
     }
 
-    getsockname( hServerSocket, (struct sockaddr *) &Address,(socklen_t *)&nAddressSize);
-    printf("Opened socket as fd (%d) on port (%d) for stream i/o\n",hServerSocket, ntohs(Address.sin_port) );
-    printf("Making a listen queue of %d elements\n",QUEUE_SIZE);
-
-    if(listen(hServerSocket,QUEUE_SIZE) == SOCKET_ERROR)
+    while (1)
     {
-        printf("Could not listen\n");
-        return 0;
-    }
+        int bytes_read;
+        int total = 0;
+        unsigned int x = 0, y = 0, error, mass;
 
-    for(;;)
-    {
-        printf("Waiting for a connection\n");
-        hSocket = accept(hServerSocket,(struct sockaddr*)&Address,(socklen_t *)&nAddressSize);
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(socket_fd, &fds);
 
-        printf("Got a connection\n");
-    
-        while (1)
-        {               
-            int bytes_read;
-            int total = 0;
-            unsigned int x = 0, y = 0;
+        struct timeval timeout;
+        timeout.tv_sec = 6 * 60;
+        timeout.tv_usec = 0;
 
-            read(hSocket, &x, sizeof(x));
-            read(hSocket, &y, sizeof(y));
-
-            // Clear the read buffer
-            memset(read_buffer, 0, SIZE);
-
-            //
-            // Read the 76800 bytes a frame consist of
-            //
-            while ((bytes_read = read(hSocket, b, 2024)) > 0)
-            {
-                // End if the socket has been closed
-                if (bytes_read == -1)
-                {
-                    return 1;
-                }
-
-                memcpy(read_buffer + total, b, bytes_read);
-                total += bytes_read;
-
-                // if (total > 76800)
-                // {
-                //     printf("Too much has been read, or too much has been sent actually??\n");
-                //     printf("%d bytes read by last read() call\n", bytes_read);
-                    
-                //     if (bytes_read < 1024)
-                //     {
-                //         printf("Less than buffer size read, ignore frame.\n");
-                //         break;
-                //     }
-                // }
-                // else if (total == 76800)
-                if (total >= 76800)
-                {
-                    copy_to_x_buffer(read_buffer, total);
-                    draw_center_point(x, y);
-
-                    if (image != NULL)
-                    {
-                        XDestroyImage(image);
-                    }
-
-                    // Allocate a new buffer for next frame. 
-                    // The old one is freed by XDestroyImage
-                    img_disp_buffer = (unsigned char *) malloc(SIZE * CHANNELS);
-                    memcpy(img_disp_buffer, img_buffer, SIZE * CHANNELS);
-
-                    image = XCreateImage(display, visual, 24, ZPixmap, 0, img_disp_buffer, 320, 240, 32, 0);
-                    XPutImage(display, window, DefaultGC(display, 0), image, 0, 0, 0, 0, 320, 240);
-
-                    break;
-                }
-            }
-
-            // Nothing has been read at all
-            if (total == 0)
-            {
-                break;
-            }
+        if (select(sizeof(fds) * 8, &fds, NULL, NULL, &timeout) < 0)
+        {
+            exitp("select()");
         }
 
+        if (read(socket_fd, &x, sizeof(x)) < 0)
+        {
+            exitp("read() (error x)");
+        }
 
-		printf("\nClosing the socket");
+        if (read(socket_fd, &y, sizeof(y)) < 0)
+        {
+            exitp("read() (error y)");
+        }
+
+        if (read(socket_fd, &error, sizeof(error)) < 0)
+        {
+            exitp("read() (error)");
+        }
+
+        if (read(socket_fd, &mass, sizeof(mass)) < 0)
+        {
+            exitp("read() (error mass)");
+        }
+
+        // Clear the read buffer
+        memset(read_buffer, 0, SIZE);
+
+        //
+        // Read the 76800 bytes a frame consist of
+        //
+        
+        bytes_read = recv(socket_fd, read_buffer, SIZE, MSG_WAITALL);
+        if (bytes_read < 0)
+        {
+            perror("recv");
+        }
+        else if (bytes_read == SIZE)
+        {
+            copy_to_x_buffer(read_buffer, bytes_read);
+            draw_center_point(x, y);
+
+            if (image != NULL)
+            {
+                XDestroyImage(image);
+            }
+
+            // Allocate a new buffer for next frame. 
+            // The old one is freed by XDestroyImage
+            img_disp_buffer = (unsigned char *) malloc(SIZE * CHANNELS);
+            memcpy(img_disp_buffer, img_buffer, SIZE * CHANNELS);
+
+            image = XCreateImage(display, visual, 24, ZPixmap, 0, img_disp_buffer, 320, 240, 32, 0);
+            XPutImage(display, window, DefaultGC(display, 0), image, 0, 0, 0, 0, 320, 240);
+
+            XSetForeground(display, DefaultGC(display, 0), 0x00ffffff); // red
+            XFillRectangle(display, window, DefaultGC(display, 0), 0, 240, 320, 60);
+
+            memset(b, 0, sizeof(b));
+            sprintf(b, "Center: (%d, %d)", x,y);
+        
+            XSetForeground(display, DefaultGC(display, 0), 0x00ff0000); // red
+            XDrawString(display, window, DefaultGC(display, 0), 5, 260, b, strlen(b));
+
+            memset(b, 0, sizeof(b));
+            sprintf(b, "Error: %d", error);
+        
+            XSetForeground(display, DefaultGC(display, 0), 0x000000ff); 
+            XDrawString(display, window, DefaultGC(display, 0), 5, 280, b, strlen(b));
+    
+        }
+        else
+        {
+            printf("Eeeeww!\n");
+        }
+    }
+
+
+		printf("Closing the socket\n");
+        /*
         if(close(hSocket) == SOCKET_ERROR)
         {
         	printf("\nCould not close socket\n");
          	return 0;
         }
+        
     }
-
+*/
 }
 
 
