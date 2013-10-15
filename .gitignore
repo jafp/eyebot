@@ -1,6 +1,6 @@
 *.o
 eyecam
-server
+viewer
 
 CMakeCache.txt
 CMakeFiles

@@ -1,4 +1,6 @@
 
+#include <string.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -32,7 +34,7 @@ int i2c_bus_close()
 	// Noop
 }
 
-int i2c_cmd_read(int addr, char cmd, char buffer[], int length)
+int i2c_cmd_read(int addr, unsigned char cmd, unsigned char buffer[], int length)
 {
     int ret_val;
     struct i2c_rdwr_ioctl_data packets;
@@ -59,19 +61,19 @@ int i2c_cmd_read(int addr, char cmd, char buffer[], int length)
     ret_val = ioctl(dev_fd, I2C_RDWR, &packets);
     if (ret_val < 0)
     {
-        perror("ioctl I2C_RDWR");
+        perror("ioctl I2C_RDWR (i2c_cmd_read)");
     }
 
-    return ret_val < 0 ? ret_val : length;
+    return ret_val;
 }
 
-int i2c_cmd_write(int addr, char cmd, char buffer[], int length)
+int i2c_cmd_write(int addr, unsigned char cmd, unsigned char buffer[], int length)
 {
     int ret_val;
     struct i2c_rdwr_ioctl_data packets;
     struct i2c_msg messages[2];
 
-    char * buf = malloc(length + 1);
+    unsigned char * buf = malloc(length + 1);
     buf[0] = cmd;
 
     memcpy(buf + 1, buffer, length);
@@ -88,7 +90,7 @@ int i2c_cmd_write(int addr, char cmd, char buffer[], int length)
     ret_val = ioctl(dev_fd, I2C_RDWR, &packets);
     if (ret_val < 0)
     {
-        perror("ioctl I2C_RDWR");
+        perror("ioctl I2C_RDWR (i2c_cmd_write)");
     }
 
     free(buf);

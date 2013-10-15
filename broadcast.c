@@ -162,6 +162,7 @@ int broadcast_init()
 
 void broadcast_release()
 {
+	close(server_socket_fd);
 	// TODO
 }
 

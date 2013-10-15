@@ -207,6 +207,30 @@ main.c.s:
 	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/main.c.s
 .PHONY : main.c.s
 
+motor_ctrl.o: motor_ctrl.c.o
+.PHONY : motor_ctrl.o
+
+# target to build an object file
+motor_ctrl.c.o:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/motor_ctrl.c.o
+.PHONY : motor_ctrl.c.o
+
+motor_ctrl.i: motor_ctrl.c.i
+.PHONY : motor_ctrl.i
+
+# target to preprocess a source file
+motor_ctrl.c.i:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/motor_ctrl.c.i
+.PHONY : motor_ctrl.c.i
+
+motor_ctrl.s: motor_ctrl.c.s
+.PHONY : motor_ctrl.s
+
+# target to generate assembly for a file
+motor_ctrl.c.s:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/motor_ctrl.c.s
+.PHONY : motor_ctrl.c.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -228,6 +252,9 @@ help:
 	@echo "... main.o"
 	@echo "... main.i"
 	@echo "... main.s"
+	@echo "... motor_ctrl.o"
+	@echo "... motor_ctrl.i"
+	@echo "... motor_ctrl.s"
 .PHONY : help
 
 

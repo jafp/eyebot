@@ -14,17 +14,23 @@
 
 #include <pthread.h>
 
+#include "common.h"
 #include "i2c.h"
 #include "broadcast.h"
+#include "motor_ctrl.h"
 #include "cam.h"
+
 
 #define SERVER_HOSTNAME		"10.42.0.1"
 #define SERVER_PORT			"23000"
 
 #define DEV					"/dev/video0"
-#define FPS 				60
+//#define FPS 				60
+#define FPS 				125
 
-#define THRESHOLD			100
+//#define THRESHOLD			100
+#define THRESHOLD 			90
+
 #define WIDTH 				320
 #define HEIGHT 				240
 #define IMG_SIZE 			(WIDTH * HEIGHT)
@@ -37,6 +43,14 @@ static unsigned long frame_counter;
 static unsigned int image_size;
 static unsigned char * buffer;
 static int socket_fd;
+
+static int speed_ref = INITIAL_SPEED;
+
+static int speed_l = INITIAL_SPEED, 
+			speed_r = INITIAL_SPEED;
+
+static int 	last_error = 0,
+			cur_error = 0;
 
 /**
  * Function prototypes
@@ -117,6 +131,19 @@ static void frame_callback(struct cam_ctx * ctx, void * frame, int length)
 	update_loop(error, x, y, count);
 }
 
+static unsigned char limit_speed(int speed)
+{	
+	if (speed > 255)
+	{
+		return 255;
+	}
+	else if (speed < 0)
+	{
+		return 0;
+	}
+	return speed;
+}
+
 /**
  * Update loop callback. Called whenever a new image has been processed.
  * From this point, it's all about calculating new speeds for the motors,
@@ -129,10 +156,44 @@ static void frame_callback(struct cam_ctx * ctx, void * frame, int length)
  */
 static int update_loop(int error, int x, int y, int mass)
 {
-	// TODO! 
-	// Read tacho from motor
-	// Do magic
-	// Tell motors new speed
+	// Experiment - stop motor if we are way off the line
+	if (mass < 50)
+	{
+		//motor_ctrl_set_speed(0, 0);
+		//return;
+	}
+
+	float 	kp = 1.0,	
+			kd = 5.0,
+
+			k_err = 0.1;
+
+	int diff,
+		enc_diff;
+
+	unsigned char enc_left, enc_right;
+	motor_ctrl_get_speed(&enc_left, &enc_right);
+
+	enc_diff = enc_left - enc_right;
+
+	// Scale error
+	error =  (k_err * error) + enc_diff;
+
+	// Differentiate
+	last_error = cur_error;
+	cur_error = error;
+	diff = cur_error - last_error;
+
+	// Calculate compensation
+	speed_l = speed_ref - (kp * error) + (kd * diff);
+	speed_r = speed_ref + (kp * error) + (kd * diff);
+
+	// Print a lot of useful stuff!
+	printf("[%10d] speed: %4d %4d - error (image): %4d  - encoder: %3d, %3d - mass: %4d \n", 
+		frame_counter, speed_l, speed_r, error, enc_left, enc_right, mass);
+	
+	// Each speed is limited to the interval 0-255 (unsigned 8-bit number)
+	motor_ctrl_set_speed(limit_speed(speed_l), limit_speed(speed_r));
 }
 
 /**
@@ -145,7 +206,7 @@ static void sigint_handler(int signal)
 	cam_end_loop(ctx);
 }
 
-static void * main_thread_fn(void * ptr)
+static void * processing_thread_fn(void * ptr)
 {
 	cam_loop(ctx);
 	pthread_exit(0);
@@ -156,7 +217,7 @@ static void * main_thread_fn(void * ptr)
  */
 int main(int argc, char ** argv)
 {
-	pthread_t main_thread, shell_thread;
+	pthread_t processing_thread, shell_thread;
 	struct addrinfo hints, *res;
 
 	ctx = (struct cam_ctx *) malloc(sizeof(struct cam_ctx));
@@ -180,12 +241,11 @@ int main(int argc, char ** argv)
 
 
 	// Open i2c bus (by internally opening the i2c device driver)
-	//if (i2c_bus_open() < 0)
-	//{
-	//	printf("Failed opening I2C bus, exiting...\n");
-	//	exit(-1);
-	//}
-
+	if (i2c_bus_open() < 0)
+	{
+		printf("Failed opening I2C bus, exiting...\n");
+		exit(-1);
+	}
 
 	// Catch CTRL-C signal and end looping
 	signal(SIGINT, sigint_handler);
@@ -198,19 +258,27 @@ int main(int argc, char ** argv)
 	broadcast_init();
 	broadcast_start();
 
+	// Start motor at the initial speed
+	motor_ctrl_set_speed(speed_l, speed_r);
+
 	// Create the main thread
-	if (pthread_create(&main_thread, NULL, main_thread_fn, ctx) < 0)
+	if (pthread_create(&processing_thread, NULL, processing_thread_fn, ctx) < 0)
 	{
 		perror("pthread_create");
 		exit(-1);
 	}
 
 	// Wait for the main thread and shell thread to finish
-	pthread_join(main_thread, NULL);
+	pthread_join(processing_thread, NULL);
 	// TODO wait for shell thread
 	
 	cam_stop_capturing(ctx);
 	cam_uninit(ctx);
+
+	// Stop robot
+	motor_ctrl_set_speed(0, 0);
+
+	broadcast_release();
 
 	// Print some statistics.
 	// TODO: Calculate and show some statistics while running?
