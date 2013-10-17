@@ -67,7 +67,6 @@ static int speed_ref = INITIAL_SPEED;
 static int speed_l = INITIAL_SPEED;
 static int speed_r = INITIAL_SPEED;
 static int last_error = 0;
-static int cur_error = 0;
 
 /**
  * Function prototypes
@@ -161,6 +160,11 @@ static unsigned char limit_speed(int speed)
 	return speed;
 }
 
+static void log()
+{
+
+}
+
 /**
  * Update loop callback. Called whenever a new image has been processed.
  * From this point, it's all about calculating new speeds for the motors,
@@ -173,42 +177,41 @@ static unsigned char limit_speed(int speed)
  */
 static int update_loop(int error, int x, int y, int mass)
 {
-	// Experiment - stop motor if we are way off the line
-	if (mass < 50)
-	{
-		//motor_ctrl_set_speed(0, 0);
-		//return;
-	}
+	static int I_sum = 0;
 
-	float 	kp = 1.0,	
-			kd = 5.0,
+	int Kp = 1, Ki = 0, Kd = 1, K_error = 10;
+	int P, I, D;
+	int correction;
+	unsigned char tacho_left, tacho_right;
 
-			k_err = 0.1;
+	// Get speed... We don't actually use it
+	motor_ctrl_get_speed(&tacho_left, &tacho_right);
 
-	int diff,
-		enc_diff;
+	// Scale error down
+	error = error / K_error;
+	
+	// Calculate PID
+	P = error * Kp;
 
-	unsigned char enc_left, enc_right;
-	motor_ctrl_get_speed(&enc_left, &enc_right);
+	I_sum += error;
+	I = I_sum * Ki;
 
-	enc_diff = enc_left - enc_right;
+	D = (error - last_error) * Kd;
+	last_error = error;
 
-	// Scale error
-	error =  (k_err * error) + enc_diff;
+	// Total correction
+	correction = P + I + D;
 
-	// Differentiate
-	last_error = cur_error;
-	cur_error = error;
-	diff = cur_error - last_error;
-
-	// Calculate compensation
-	speed_l = speed_ref - (kp * error) + (kd * diff);
-	speed_r = speed_ref + (kp * error) + (kd * diff);
+	// Calculate new speed
+	speed_l = speed_ref - correction;
+	speed_r = speed_ref + correction;
 
 	// Print a lot of useful stuff!
-	printf("[%10d] speed: %4d %4d - error (image): %4d  - encoder: %3d, %3d - mass: %4d \n", 
-		frame_counter, speed_l, speed_r, error, enc_left, enc_right, mass);
+	//printf("[%10d] speed: %4d %4d - error (image): %4d  - encoder: %3d, %3d - mass: %4d \n", 
+	//	frame_counter, speed_l, speed_r, error, enc_left, enc_right, mass);
 	
+	//log(frame_counter, error, speed_l, speed_r, tacho_left, tacho_right, P, I, D, mass);
+
 	// Each speed is limited to the interval 0-255 (unsigned 8-bit number)
 	motor_ctrl_set_speed(limit_speed(speed_l), limit_speed(speed_r));
 }
