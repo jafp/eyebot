@@ -1,5 +1,5 @@
 
-#include "cam.h"
+#include "camera.h"
 
 #include <stdio.h>
 #include <stdlib.h>

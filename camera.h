@@ -1,6 +1,6 @@
 
-#ifndef _CAM_H_
-#define _CAM_H_
+#ifndef _CAMERA_H_
+#define _CAMERA_H_
 
 #include <unistd.h>
 #include <sys/time.h>

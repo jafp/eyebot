@@ -18,8 +18,8 @@
 #include "i2c.h"
 #include "broadcast.h"
 #include "motor_ctrl.h"
-#include "cam.h"
-
+#include "camera.h"
+#include "log.h"
 
 #define SERVER_HOSTNAME		"10.42.0.1"
 #define SERVER_PORT			"23000"
@@ -45,6 +45,19 @@
 #define LINE				0
 
 /**
+ * Overall states for the state machine.
+ */
+enum states_t {
+	WAITING,
+	GOTO_LINE,
+	FOLLOW_LINE,
+	FOLLOW_LINE_SPEEDY,
+	GOTO_WALL_AND_BACK,
+	FOLLOW_WALL,
+	TRACK_COMPLETE
+};
+
+/**
  * Camera interface (see cam.h)
  */
 static struct camera * ctx;
@@ -59,6 +72,10 @@ static unsigned char * buffer;
  */
 static unsigned long frame_counter;
 
+/**
+ * Current state.
+ */
+static states_t state;
 
 /** 
  * Variables used in the PID controller.
@@ -72,7 +89,6 @@ static int last_error = 0;
  * Function prototypes
  */
 static int update_loop(int error, int x, int y, int mass);
-
 
 /**
  * Callback fired when a frame is ready.
