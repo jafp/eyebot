@@ -24,6 +24,7 @@ int i2c_bus_open()
 		perror("Failed opening I2C bus");
 		return -1;		
 	}
+    return 0;
 }
 
 /**
@@ -31,9 +32,29 @@ int i2c_bus_open()
  */
 int i2c_bus_close()
 {
-	// Noop
+	if (close(dev_fd) < 0)
+    {
+        perror("Failed closing the I2C bus");
+        return -1;
+    }
+    return 0;
 }
 
+/**
+ * Execute a read command on the slave with the address given in `addr`.
+ * 
+ * The following steps are done in the process of reading from the slave:
+ *  - The slave is aquired with the R/W bit set (write - master to slave)
+ *  - A single byte is transmitted to the slave, indicating which command to execute
+ *  - The restart is sent on the bus, and the slave is aquired with the R/W
+ *      bit held low (read - slave to master). 
+ *  - `length` number of bytes are read from the slave into `buffer`.
+ *
+ * \param addr      Slave address
+ * \param cmd       Command identifier
+ * \param buffer    Buffer where to place read bytes
+ * \param length    Number of bytes to read from the slave
+ */
 int i2c_cmd_read(int addr, unsigned char cmd, unsigned char buffer[], int length)
 {
     int ret_val;

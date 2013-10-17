@@ -73,6 +73,8 @@ static void signal_handler(int signal)
 /**
  * Send the given packet over the socket.
  * The fields are sent in the same order as defined in the struct.
+ *
+ * \param packet Struct with information to send
  */
 static int send_packet(const broadcast_packet_t * packet)
 {
@@ -119,8 +121,6 @@ static void * broadcast_thread(void * ptr)
 			pthread_cond_wait(&frame_buffer_cv, &frame_buffer_mtx);
 
 			// Frame is ready!
-		
-			//int ret = send(socket_fd, packet.frame, 320 * 240, 0);
 
 			if (send_packet(&packet) < 0)
 			{

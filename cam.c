@@ -39,7 +39,7 @@ static int xioctl(int fh, int request, void *arg)
     return r;
 }
 
-static int read_frame(struct cam_ctx * ctx)
+static int read_frame(struct camera * ctx)
 {
     struct v4l2_buffer buf;
     unsigned int i;
@@ -82,7 +82,7 @@ static int read_frame(struct cam_ctx * ctx)
     return 1;
 }
 
-static void stop_capturing(struct cam_ctx * ctx)
+static void stop_capturing(struct camera * ctx)
 {
     enum v4l2_buf_type type;
     type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -94,7 +94,7 @@ static void stop_capturing(struct cam_ctx * ctx)
     
 }
 
-static void start_capturing(struct cam_ctx * ctx)
+static void start_capturing(struct camera * ctx)
 {
     unsigned int i;
     enum v4l2_buf_type type;
@@ -122,7 +122,7 @@ static void start_capturing(struct cam_ctx * ctx)
     }
 }
 
-static void uninit_device(struct cam_ctx * ctx)
+static void uninit_device(struct camera * ctx)
 {
     unsigned int i;
 
@@ -139,7 +139,7 @@ static void uninit_device(struct cam_ctx * ctx)
 }
 
 
-static void init_mmap(struct cam_ctx * ctx)
+static void init_mmap(struct camera * ctx)
 {
     struct v4l2_requestbuffers req;
 
@@ -204,7 +204,7 @@ static void init_mmap(struct cam_ctx * ctx)
     }
 }
 
-static void init_device(struct cam_ctx * ctx)
+static void init_device(struct camera * ctx)
 {
     struct v4l2_format fmt;
     struct v4l2_streamparm sparm;
@@ -244,7 +244,7 @@ static void init_device(struct cam_ctx * ctx)
    	init_mmap(ctx);
 }
 
-static void close_device(struct cam_ctx * ctx)
+static void close_device(struct camera * ctx)
 {
     if (-1 == close(ctx->fd))
             errno_exit("close");
@@ -252,7 +252,7 @@ static void close_device(struct cam_ctx * ctx)
     ctx->fd = -1;
 }
 
-static void open_device(struct cam_ctx * ctx)
+static void open_device(struct camera * ctx)
 {
     struct stat st;
 
@@ -276,7 +276,7 @@ static void open_device(struct cam_ctx * ctx)
     }
 }
 
-void cam_init(struct cam_ctx * ctx)
+void cam_init(struct camera * ctx)
 {
 	if (!ctx->dev)
 	{
@@ -288,31 +288,31 @@ void cam_init(struct cam_ctx * ctx)
     init_device(ctx);
 }
 
-void cam_uninit(struct cam_ctx * ctx)
+void cam_uninit(struct camera * ctx)
 {
 	uninit_device(ctx);
     close_device(ctx);
 }
 
-void cam_start_capturing(struct cam_ctx * ctx)
+void cam_start_capturing(struct camera * ctx)
 {
     
     
 	start_capturing(ctx);
 }
 
-void cam_stop_capturing(struct cam_ctx * ctx)
+void cam_stop_capturing(struct camera * ctx)
 {
 	stop_capturing(ctx);
     
 }
 
-void cam_end_loop(struct cam_ctx * ctx)
+void cam_end_loop(struct camera * ctx)
 {
     ctx->run = 0;
 }
 
-void cam_loop(struct cam_ctx * ctx)
+void cam_loop(struct camera * ctx)
 {
     unsigned int count;
 
@@ -361,7 +361,7 @@ void cam_loop(struct cam_ctx * ctx)
     gettimeofday(&(ctx->end), NULL);
 }
 
-double cam_get_measured_fps(struct cam_ctx * ctx)
+double cam_get_measured_fps(struct camera * ctx)
 {
     double  elapsed = (ctx->end.tv_sec - ctx->start.tv_sec) * 1000.0;
     elapsed += (ctx->end.tv_usec - ctx->start.tv_usec) / 1000.0;

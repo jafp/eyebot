@@ -6,7 +6,7 @@
 #include <sys/time.h>
 
 // Forward declaration of context structure
-struct cam_ctx;
+struct camera;
 
 struct __buffer {
     void   *start;
@@ -17,10 +17,10 @@ struct cam_config {
 	unsigned int width;
 	unsigned int height;
 	unsigned int fps;	
-	void (*frame_cb)(struct cam_ctx *, void *, int length);
+	void (*frame_cb)(struct camera *, void *, int length);
 };
 
-struct cam_ctx {
+struct camera {
 	struct cam_config config;
 
 	int run;
@@ -34,15 +34,15 @@ struct cam_ctx {
 };
 
 
-void cam_init(struct cam_ctx *);
-void cam_uninit(struct cam_ctx *);
+void cam_init(struct camera *);
+void cam_uninit(struct camera *);
 
-void cam_start_capturing(struct cam_ctx *);
-void cam_stop_capturing(struct cam_ctx *);
+void cam_start_capturing(struct camera *);
+void cam_stop_capturing(struct camera *);
 
-void cam_loop(struct cam_ctx *);
-void cam_end_loop(struct cam_ctx *);
+void cam_loop(struct camera *);
+void cam_end_loop(struct camera *);
 
-double cam_get_measured_fps(struct cam_ctx * ctx);
+double cam_get_measured_fps(struct camera * ctx);
 
 #endif

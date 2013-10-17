@@ -24,33 +24,50 @@
 #define SERVER_HOSTNAME		"10.42.0.1"
 #define SERVER_PORT			"23000"
 
+/**
+ * Camera
+ */
 #define DEV					"/dev/video0"
-//#define FPS 				60
-#define FPS 				125
+#define FPS 				60
 
-//#define THRESHOLD			100
-#define THRESHOLD 			90
-
+/**
+ * Image size
+ */
 #define WIDTH 				320
 #define HEIGHT 				240
 #define IMG_SIZE 			(WIDTH * HEIGHT)
 
+/** 
+ * Image processing
+ */
+#define THRESHOLD			100
 #define FLOOR				255
 #define LINE				0
 
-static struct cam_ctx * ctx;
-static unsigned long frame_counter;
-static unsigned int image_size;
+/**
+ * Camera interface (see cam.h)
+ */
+static struct camera * ctx;
+
+/**
+ * Buffer for temporary image data
+ */ 
 static unsigned char * buffer;
-static int socket_fd;
 
+/**
+ * Frame counter
+ */
+static unsigned long frame_counter;
+
+
+/** 
+ * Variables used in the PID controller.
+ */
 static int speed_ref = INITIAL_SPEED;
-
-static int speed_l = INITIAL_SPEED, 
-			speed_r = INITIAL_SPEED;
-
-static int 	last_error = 0,
-			cur_error = 0;
+static int speed_l = INITIAL_SPEED;
+static int speed_r = INITIAL_SPEED;
+static int last_error = 0;
+static int cur_error = 0;
 
 /**
  * Function prototypes
@@ -65,7 +82,7 @@ static int update_loop(int error, int x, int y, int mass);
  * \param frame Pointer to the frame data (planar image data)
  * \param length The of the frame data (in bytes, not pixels)
  */
-static void frame_callback(struct cam_ctx * ctx, void * frame, int length)
+static void frame_callback(struct camera * ctx, void * frame, int length)
 {
 	int i, p = 0;
 	unsigned char v;
@@ -220,7 +237,7 @@ int main(int argc, char ** argv)
 	pthread_t processing_thread, shell_thread;
 	struct addrinfo hints, *res;
 
-	ctx = (struct cam_ctx *) malloc(sizeof(struct cam_ctx));
+	ctx = (struct camera *) malloc(sizeof(struct camera));
 	if (ctx == NULL)
 	{
 		// We are out of memory...this never happens!
