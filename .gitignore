@@ -1,6 +1,7 @@
 *.o
 eyecam
 viewer
+Makefile
 
 CMakeCache.txt
 CMakeFiles

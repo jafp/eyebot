@@ -7,6 +7,7 @@
 #include <linux/i2c.h> 
 #include <linux/i2c-dev.h>
 
+#include "common.h"
 #include "i2c.h"
 
 /**

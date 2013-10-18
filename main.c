@@ -75,7 +75,7 @@ static unsigned long frame_counter;
 /**
  * Current state.
  */
-static states_t state;
+//static states_t state;
 
 /** 
  * Variables used in the PID controller.
@@ -176,7 +176,7 @@ static unsigned char limit_speed(int speed)
 	return speed;
 }
 
-static void log()
+static void log_step()
 {
 
 }
@@ -226,7 +226,7 @@ static int update_loop(int error, int x, int y, int mass)
 	//printf("[%10d] speed: %4d %4d - error (image): %4d  - encoder: %3d, %3d - mass: %4d \n", 
 	//	frame_counter, speed_l, speed_r, error, enc_left, enc_right, mass);
 	
-	//log(frame_counter, error, speed_l, speed_r, tacho_left, tacho_right, P, I, D, mass);
+	//log_step(frame_counter, error, speed_l, speed_r, tacho_left, tacho_right, P, I, D, mass);
 
 	// Each speed is limited to the interval 0-255 (unsigned 8-bit number)
 	motor_ctrl_set_speed(limit_speed(speed_l), limit_speed(speed_r));

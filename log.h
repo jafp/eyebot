@@ -8,8 +8,7 @@ typedef struct log_fields {
 	unsigned long frame;
 	
 	int mass;
-	int error;
-	int center_x,
+	int center_x;
 	int center_y;
 
 	int tacho_left;
@@ -30,7 +29,7 @@ typedef struct log_entry {
 
 typedef struct log_entry log_t;
 
-logger_t * log_create();
+log_t * log_create();
 void log_add(log_t * log, log_entry_t * entry);
 void log_dump(log_t * log, const char filename);
 void log_free(log_t * log);

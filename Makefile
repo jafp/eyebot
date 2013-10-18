@@ -39,10 +39,10 @@ RM = /usr/bin/cmake -E remove -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/pi/nfs/eyecam
+CMAKE_SOURCE_DIR = /home/pi/mnt/eyecam
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/pi/nfs/eyecam
+CMAKE_BINARY_DIR = /home/pi/mnt/eyecam
 
 #=============================================================================
 # Targets provided globally by CMake.
@@ -69,9 +69,9 @@ rebuild_cache/fast: rebuild_cache
 
 # The main all target
 all: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/pi/nfs/eyecam/CMakeFiles /home/pi/nfs/eyecam/CMakeFiles/progress.marks
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/pi/mnt/eyecam/CMakeFiles /home/pi/mnt/eyecam/CMakeFiles/progress.marks
 	$(MAKE) -f CMakeFiles/Makefile2 all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/pi/nfs/eyecam/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/pi/mnt/eyecam/CMakeFiles 0
 .PHONY : all
 
 # The main clean target
@@ -135,29 +135,29 @@ broadcast.c.s:
 	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/broadcast.c.s
 .PHONY : broadcast.c.s
 
-cam.o: cam.c.o
-.PHONY : cam.o
+camera.o: camera.c.o
+.PHONY : camera.o
 
 # target to build an object file
-cam.c.o:
-	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/cam.c.o
-.PHONY : cam.c.o
+camera.c.o:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/camera.c.o
+.PHONY : camera.c.o
 
-cam.i: cam.c.i
-.PHONY : cam.i
+camera.i: camera.c.i
+.PHONY : camera.i
 
 # target to preprocess a source file
-cam.c.i:
-	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/cam.c.i
-.PHONY : cam.c.i
+camera.c.i:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/camera.c.i
+.PHONY : camera.c.i
 
-cam.s: cam.c.s
-.PHONY : cam.s
+camera.s: camera.c.s
+.PHONY : camera.s
 
 # target to generate assembly for a file
-cam.c.s:
-	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/cam.c.s
-.PHONY : cam.c.s
+camera.c.s:
+	$(MAKE) -f CMakeFiles/eyecam.dir/build.make CMakeFiles/eyecam.dir/camera.c.s
+.PHONY : camera.c.s
 
 i2c.o: i2c.c.o
 .PHONY : i2c.o
@@ -243,9 +243,9 @@ help:
 	@echo "... broadcast.o"
 	@echo "... broadcast.i"
 	@echo "... broadcast.s"
-	@echo "... cam.o"
-	@echo "... cam.i"
-	@echo "... cam.s"
+	@echo "... camera.o"
+	@echo "... camera.i"
+	@echo "... camera.s"
 	@echo "... i2c.o"
 	@echo "... i2c.i"
 	@echo "... i2c.s"
