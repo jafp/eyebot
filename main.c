@@ -437,6 +437,9 @@ static void * shell_thread_fn(void * ptr)
 				}
 			}
 
+			/**
+			 *
+			 */
 			if (strcmp(buffer, "start") == 0)
 			{	
 				// Start motor at the initial speed
@@ -444,37 +447,58 @@ static void * shell_thread_fn(void * ptr)
 
 				current_state = FOLLOW_LINE;
 			}
+			/**
+			 *
+			 */
 			else if (strcmp(buffer, "stop") == 0)
 			{
 				current_state = WAITING;
 			}
+			/**
+			 *
+			 */
 			else if (strcmp(buffer, "exit") == 0)
 			{
 				cam_end_loop(cam);
 				pthread_exit(0);
 			}
+			/**
+			 *
+			 */
 			else if (strcmp(buffer, "slow") == 0)
 			{
 				speed_ref -= 10;
 				printf("Speed ref set to %d\n", speed_ref);
 			}
+			/**
+			 *
+			 */
 			else if (strcmp(buffer, "fast") == 0)
 			{
 				speed_ref += 10;
 				printf("Speed ref set to %d\n", speed_ref);
 			}
+			/**
+			 *
+			 */
 			else if (strcmp(buffer, "goto") == 0)
 			{
 				current_state = GOTO_LINE;
 			}
+			/**
+			 *
+			 */
 			else if (strcmp(buffer, "show") == 0)
 			{
 				printf("K_p = %.2f, K_i = %.2f, K_d = %.2f, K_e = %.2f\n", 
 					K_p, K_i, K_d, K_error);
 			}
+			/**
+			 *
+			 */
 			else if (strcmp(buffer, "set") == 0)
 			{
-				scanf("set %f %f %f %f", &K_p, &K_i, &K_d, &K_error);
+				sscanf(buffer, "set %f %f %f %f", &K_p, &K_i, &K_d, &K_error);
 				printf("Updated constants - K_p = %.2f, K_i = %.2f, K_d = %.2f, K_e = %.2f\n", 
 					K_p, K_i, K_d, K_error);
 			}
