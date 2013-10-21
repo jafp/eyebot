@@ -67,6 +67,12 @@ typedef enum {
 	TRACK_COMPLETE
 } state_t;
 
+typedef enum {
+	GO_STRAIGTH,
+	TURN_RIGHT,
+	READY
+} goto_line_state_t;
+
 
 typedef struct point {
 	int x, y, mass, error;
@@ -96,6 +102,8 @@ static unsigned long frame_counter;
  * Current state.
  */
 static state_t current_state;
+
+static goto_line_state_t goto_line_state;
 
 /** 
  * Variables used in the PID controller.
@@ -243,77 +251,138 @@ static int update_loop(int mass, point_t * upper, point_t * lower)
 {
 	static int I_sum = 0;
 
-	float P, I, D;
-	float err;
-	float correction;
-	//unsigned char tacho_left, tacho_right;
-
-	// Get speed... We don't actually use it
-	//motor_ctrl_get_speed(&tacho_left, &tacho_right);
-
-	// Scale error down
-	err = lower->error * K_ERROR; 
-	
-	//
-	// Calculate PID
-	//
-	P = err * K_P;
-
-	if (I_sum > 20) { I_sum = 20; }
-	if (I_sum < -20) { I_sum = -20; }
-
-	I_sum += err;
-	I = I_sum * K_I;
-
-	D = (err - last_error) * K_D;
-	last_error = err;
-
-	// Total correction
-	correction = P + I + D;
-
-	// Calculate new speed
-	speed_l = (int) round(speed_ref - correction);
-	speed_r = (int) round(speed_ref + correction);
-
-	// Limit the speed if big changed occur in the future - uh, magic!
-	if (abs(lower->error - upper->error) > TURN_THRESHOLD)
+	switch (current_state)
 	{
-		speed_l -= TURN_SPEED_LIMITER;
-		speed_r -= TURN_SPEED_LIMITER;
+		case FOLLOW_LINE:
+		case FOLLOW_LINE_SPEEDY:
+		{
+			float P, I, D;
+			float err;
+			float correction;
+			//unsigned char tacho_left, tacho_right;
+
+			if (current_state == FOLLOW_LINE_SPEEDY)
+			{
+				// TODO Increase speed!
+			}
+
+			// Get speed... We don't actually use it
+			//motor_ctrl_get_speed(&tacho_left, &tacho_right);
+
+			// Scale error down
+			err = lower->error * K_ERROR; 
+			
+			//
+			// Calculate PID
+			//
+			P = err * K_P;
+
+			if (I_sum > 20) { I_sum = 20; }
+			if (I_sum < -20) { I_sum = -20; }
+
+			I_sum += err;
+			I = I_sum * K_I;
+
+			D = (err - last_error) * K_D;
+			last_error = err;
+
+			// Total correction
+			correction = P + I + D;
+
+			// Calculate new speed
+			speed_l = (int) round(speed_ref - correction);
+			speed_r = (int) round(speed_ref + correction);
+
+			// Limit the speed if big changed occur in the future - uh, magic!
+			if (abs(lower->error - upper->error) > TURN_THRESHOLD)
+			{
+				speed_l -= TURN_SPEED_LIMITER;
+				speed_r -= TURN_SPEED_LIMITER;
+			}
+
+			// Send new speeds to motor controller
+			// (Each speed is limited to the interval 0-255 (unsigned 8-bit number))
+			motor_ctrl_set_speed(limit_speed(speed_l), limit_speed(speed_r));
+
+			//
+			// Add log entry
+			//
+
+			log_entry_t * entry = log_entry_create();
+			log_fields_t * f = &entry->fields;
+
+			f->time = 0;
+			f->frame = frame_counter;
+
+			f->error_lower_x = lower->error;
+			f->error_upper_x = 0;
+			f->mass = mass;
+
+			f->P = P;
+			f->I = I;
+			f->D = D;
+
+			f->speed_left = speed_l;
+			f->speed_right = speed_r;
+
+			f->speed_ref_left = speed_ref;
+			f->speed_ref_right = speed_ref;
+
+			f->tacho_left = 0;
+			f->tacho_right = 0;
+
+			log_add(logs, entry);	
+
+			break;
+		}
+		case GOTO_LINE:
+		{
+			switch (goto_line_state)
+			{
+				// Go straight till we see the line
+				case GO_STRAIGTH:
+				{
+					if (upper->mass > 5000)
+					{
+						motor_ctrl_set_speed(0, 0);
+						goto_line_state = TURN_RIGHT;
+					}
+					else
+					{
+						motor_ctrl_set_speed(20, 20);
+					}
+					break;
+				}
+				// The is perpendicular in front of us.
+				// Turn right till the robot is parallel on top of the line
+				case TURN_RIGHT:
+				{
+					if (lower->mass > 8000)
+					{
+						motor_ctrl_set_speed(0, 0);
+						goto_line_state = READY;
+					}
+					else
+					{
+						motor_ctrl_set_speed(20, 0);
+					}
+					break;
+				}
+				// We are know ready to follow the line
+				case READY:
+				{
+					current_state = FOLLOW_LINE;
+					break;
+				}
+			}
+
+			break;
+		}
+		default: 
+		{
+
+		}
 	}
-
-	// Send new speeds to motor controller
-	// (Each speed is limited to the interval 0-255 (unsigned 8-bit number))
-	motor_ctrl_set_speed(limit_speed(speed_l), limit_speed(speed_r));
-
-	//
-	// Add log entry
-	//
-
-	log_entry_t * entry = log_entry_create();
-	log_fields_t * f = &entry->fields;
-
-	f->time = 0;
-	f->frame = frame_counter;
-
-	f->error_lower_x = lower->error;
-	f->error_upper_x = 0;
-	f->mass = mass;
-
-	f->P = P;
-	f->I = I;
-	f->D = D;
-
-	f->speed_left = speed_l;
-	f->speed_right = speed_r;
-
-	f->speed_ref_left = speed_ref;
-	f->speed_ref_right = speed_ref;
-
-	f->tacho_left = 0;
-	f->tacho_right = 0;
-
-	log_add(logs, entry);	
 }
 
 /**
@@ -338,7 +407,7 @@ static void * processing_thread_fn(void * ptr)
 /**
  *
  */
-/*static void * shell_thread_fn(void * ptr)
+static void * shell_thread_fn(void * ptr)
 {
 	int i;
 	char buffer[255];
@@ -346,7 +415,7 @@ static void * processing_thread_fn(void * ptr)
 	while (1)
 	{	
 		printf(" >> ");
-		if (fgets(buffer, 255, stdio) != NULL)
+		if (fgets(buffer, 255, stdin) != NULL)
 		{	
 			// Skip empty line
 			if (buffer[0] == '\n')
@@ -364,21 +433,38 @@ static void * processing_thread_fn(void * ptr)
 			}
 
 			if (strcmp(buffer, "start") == 0)
-			{
+			{	
+				// Start motor at the initial speed
+				motor_ctrl_set_speed(speed_l, speed_r);
 
+				current_state = FOLLOW_LINE;
 			}
 			else if (strcmp(buffer, "stop") == 0)
 			{
-
+				current_state = WAITING;
 			}
 			else if (strcmp(buffer, "exit") == 0)
 			{
-
+				cam_end_loop(cam);
+				pthread_exit(0);
+			}
+			else if (strcmp(buffer, "slow") == 0)
+			{
+				speed_ref -= 10;
+				printf("Speed ref set to %d\n", speed_ref);
+			}
+			else if (strcmp(buffer, "fast") == 0)
+			{
+				speed_ref += 10;
+				printf("Speed ref set to %d\n", speed_ref);
+			}
+			else if (strcmp(buffer, "goto") == 0)
+			{
+				current_state = GOTO_LINE;
 			}
 		}
 	}
 }
-*/
 
 static void setup_camera()
 {
@@ -437,19 +523,15 @@ int main(int argc, char ** argv)
 	broadcast_init();
 	broadcast_start();
 
-	// Start motor at the initial speed
-	motor_ctrl_set_speed(speed_l, speed_r);
+	// Create the main processing thread (camera and update loop)
+	pthread_create(&processing_thread, NULL, processing_thread_fn, NULL);
 
-	// Create the main thread
-	if (pthread_create(&processing_thread, NULL, processing_thread_fn, cam) < 0)
-	{
-		perror("pthread_create");
-		exit(-1);
-	}
-
+	// Create the shell thread
+	pthread_create(&shell_thread, NULL, shell_thread_fn, NULL);
+	
 	// Wait for the main thread and shell thread to finish
 	pthread_join(processing_thread, NULL);
-	// TODO wait for shell thread
+	pthread_join(shell_thread, NULL);	
 	
 	cam_stop_capturing(cam);
 	cam_uninit(cam);
