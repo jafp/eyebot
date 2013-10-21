@@ -113,6 +113,11 @@ static int speed_l = INITIAL_SPEED;
 static int speed_r = INITIAL_SPEED;
 static float last_error = 0;
 
+static float K_p = K_P;
+static float K_i = K_I;
+static float K_d = K_D;
+static float K_error = K_ERROR;
+
 /**
  * Function prototypes
  */
@@ -270,20 +275,20 @@ static int update_loop(int mass, point_t * upper, point_t * lower)
 			//motor_ctrl_get_speed(&tacho_left, &tacho_right);
 
 			// Scale error down
-			err = lower->error * K_ERROR; 
+			err = lower->error * K_error; 
 			
 			//
 			// Calculate PID
 			//
-			P = err * K_P;
+			P = err * K_p;
 
 			if (I_sum > 20) { I_sum = 20; }
 			if (I_sum < -20) { I_sum = -20; }
 
 			I_sum += err;
-			I = I_sum * K_I;
+			I = I_sum * K_i;
 
-			D = (err - last_error) * K_D;
+			D = (err - last_error) * K_d;
 			last_error = err;
 
 			// Total correction
@@ -462,6 +467,17 @@ static void * shell_thread_fn(void * ptr)
 			{
 				current_state = GOTO_LINE;
 			}
+			else if (strcmp(buffer, "show") == 0)
+			{
+				printf("K_p = %.2f, K_i = %.2f, K_d = %.2f, K_e = %.2f\n", 
+					K_p, K_i, K_d, K_error);
+			}
+			else if (strcmp(buffer, "set") == 0)
+			{
+				scanf("set %f %f %f %f", &K_p, &K_i, &K_d, &K_error);
+				printf("Updated constants - K_p = %.2f, K_i = %.2f, K_d = %.2f, K_e = %.2f\n", 
+					K_p, K_i, K_d, K_error);
+			}
 		}
 	}
 }
@@ -557,6 +573,7 @@ int main(int argc, char ** argv)
 		timeinfo->tm_mon + 1, timeinfo->tm_year + 1900, timeinfo->tm_hour, 
 		timeinfo->tm_min, timeinfo->tm_sec);
 
+	printf("Logging run data to %s\n", filename);
 	log_dump(logs, filename);
 
 	// Print some statistics.
