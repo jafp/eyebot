@@ -1,5 +1,6 @@
 
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
@@ -11,7 +12,6 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
-
 #include <pthread.h>
 
 #include "common.h"
@@ -20,6 +20,16 @@
 #include "motor_ctrl.h"
 #include "camera.h"
 #include "log.h"
+
+
+#define K_P					2.0
+#define	K_I					0.0
+#define K_D					10.0
+#define K_ERROR 			0.1
+
+#define TURN_THRESHOLD		20.0
+#define TURN_SPEED_LIMITER	20.0
+
 
 #define SERVER_HOSTNAME		"10.42.0.1"
 #define SERVER_PORT			"23000"
@@ -57,6 +67,16 @@ typedef enum {
 	TRACK_COMPLETE
 } state_t;
 
+
+typedef struct point {
+	int x, y, mass, error;
+} point_t;
+
+/**
+ * List of log entries
+ */
+static log_list_t * logs;
+
 /**
  * Camera interface (see cam.h)
  */
@@ -83,12 +103,48 @@ static state_t current_state;
 static int speed_ref = INITIAL_SPEED;
 static int speed_l = INITIAL_SPEED;
 static int speed_r = INITIAL_SPEED;
-static int last_error = 0;
+static float last_error = 0;
 
 /**
  * Function prototypes
  */
-static int update_loop(int error, int x, int y, int mass);
+static int update_loop(int mass, point_t * upper, point_t * lower);
+
+
+/**
+ * Calculate the "center of mass" of the given portion of the image,
+ * given as an Y-offset and Y-length.
+ */
+static point_t calculate_center_of_mass(int y_offset_start, int y_offset_end)
+{
+	point_t pt = {0, 0, 0, 0};
+	int offset_start, offset_end, sum, x, y, i;
+
+	offset_start = y_offset_start * WIDTH;
+	offset_end = y_offset_end * WIDTH;
+
+	for (i = offset_start; i < offset_end; i++)
+	{
+		if (buffer[i] == LINE)
+		{
+			x += i % WIDTH;
+			y += i / WIDTH;
+			sum++;
+		}
+	}
+
+	if (sum > 0)
+	{
+		pt.x = x / sum;
+		pt.y = y / sum;
+		pt.error = (WIDTH / 2) - pt.x;
+	}
+
+	pt.mass = sum;
+
+	return pt;
+}
+
 
 /**
  * Callback fired when a frame is ready.
@@ -102,9 +158,7 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 	int i, p = 0;
 	unsigned char v;
 	unsigned char * ptr;
-	unsigned int x = 0;
-	unsigned int y = 0;
-	unsigned int count = 0, error = 0;
+	unsigned int count = 0;
 	
 	ptr = (unsigned char *) frame;
 
@@ -128,39 +182,38 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 		// Do thresholding
 		v = buffer[i] = v < THRESHOLD ? LINE : FLOOR;
 
-		if (v == 0)
+		if (v == LINE)
 		{
-			// Calculate the X,Y coordinate from the current array position.
-			// TODO: Remove hardcoded image size values
-			x += i % 320;
-			y += i / 320;
 			count++;
 		}
 
 		ptr += 2;
 	}
 
-	// Calculate the average X,Y position, and then the "error", which is the
-	// difference of the X position and the center of the image.
-	if (count > 0)
-	{
-		x = x / count;
-		y = y / count;
-		error = 160 - x;
-	}
+	// 
+	// Calculate center of mass at the upper half of the image.
+	// (this is where the line is farest away)
+	//
+	point_t upper = calculate_center_of_mass(0, HEIGHT / 2);
+
+	//
+	// Calculate center of mass at the lower half of the image
+	//
+	point_t lower = calculate_center_of_mass(HEIGHT / 2, HEIGHT);
+
 
 	// Transmit every 4rd frame over sockets.
 	// This is 15 frames per second when we are capturing
 	// 60 frames per second from the camera.
 	if (frame_counter % 2 == 0)
 	{
-		broadcast_send(x, y, error, buffer);
+		broadcast_send(lower.x, lower.y, lower.error, buffer);
 	}
 
 	frame_counter++;
 
 	// Dispatch the updating to another function
-	update_loop(error, x, y, count);
+	update_loop(count, &upper, &lower);
 }
 
 static unsigned char limit_speed(int speed)
@@ -176,11 +229,6 @@ static unsigned char limit_speed(int speed)
 	return speed;
 }
 
-static void log_step()
-{
-
-}
-
 /**
  * Update loop callback. Called whenever a new image has been processed.
  * From this point, it's all about calculating new speeds for the motors,
@@ -191,49 +239,81 @@ static void log_step()
  * \param x The calculated Y position of the center mass of the line
  * \param mass The number of pixels identified as the line
  */
-static int update_loop(int error, int x, int y, int mass)
+static int update_loop(int mass, point_t * upper, point_t * lower)
 {
 	static int I_sum = 0;
 
-	int Kp = 2, Ki = 1, Kd = 20, K_error = 10;
-	int P, I, D;
-	int correction;
-	unsigned char tacho_left, tacho_right;
+	float P, I, D;
+	float err;
+	float correction;
+	//unsigned char tacho_left, tacho_right;
 
 	// Get speed... We don't actually use it
 	//motor_ctrl_get_speed(&tacho_left, &tacho_right);
 
 	// Scale error down
-	error = error / K_error;
+	err = lower->error * K_ERROR; 
 	
+	//
 	// Calculate PID
-	P = error * Kp;
+	//
+	P = err * K_P;
 
 	if (I_sum > 20) { I_sum = 20; }
 	if (I_sum < -20) { I_sum = -20; }
 
-	I_sum += error;
-	I = 0;//I_sum / 30;
+	I_sum += err;
+	I = I_sum * K_I;
 
-	D = (error - last_error) * Kd;
-	last_error = error;
+	D = (err - last_error) * K_D;
+	last_error = err;
 
 	// Total correction
 	correction = P + I + D;
 
 	// Calculate new speed
-	speed_l = speed_ref - correction;
-	speed_r = speed_ref + correction;
+	speed_l = (int) round(speed_ref - correction);
+	speed_r = (int) round(speed_ref + correction);
 
-	// Print a lot of useful stuff!
-	//printf("[%10d] speed: %4d %4d - error (image): %4d  - encoder: %3d, %3d - mass: %4d \n", 
-	//	frame_counter, speed_l, speed_r, error, enc_left, enc_right, mass);
-	printf("%4d %4d %4d %4d %4d %4d\n", error, P, I, D, correction, I_sum);
-	
-	//log_step(frame_counter, error, speed_l, speed_r, tacho_left, tacho_right, P, I, D, mass);
+	// Limit the speed if big changed occur in the future - uh, magic!
+	if (abs(lower->error - upper->error) > TURN_THRESHOLD)
+	{
+		speed_l -= TURN_SPEED_LIMITER;
+		speed_r -= TURN_SPEED_LIMITER;
+	}
 
-	// Each speed is limited to the interval 0-255 (unsigned 8-bit number)
+	// Send new speeds to motor controller
+	// (Each speed is limited to the interval 0-255 (unsigned 8-bit number))
 	motor_ctrl_set_speed(limit_speed(speed_l), limit_speed(speed_r));
+
+	//
+	// Add log entry
+	//
+
+	log_entry_t * entry = log_entry_create();
+	log_fields_t * f = &entry->fields;
+
+	f->time = 0;
+	f->frame = frame_counter;
+
+	f->error_lower_x = lower->error;
+	f->error_upper_x = 0;
+	f->mass = mass;
+
+	f->P = P;
+	f->I = I;
+	f->D = D;
+
+	f->speed_left = speed_l;
+	f->speed_right = speed_r;
+
+	f->speed_ref_left = speed_ref;
+	f->speed_ref_right = speed_ref;
+
+	f->tacho_left = 0;
+	f->tacho_right = 0;
+
+	log_add(logs, entry);	
 }
 
 /**
@@ -330,6 +410,9 @@ int main(int argc, char ** argv)
 	current_state = WAITING;
 	buffer = (unsigned char *) malloc(IMG_SIZE);
 
+	// Allocate and initialize the logging system
+	logs = log_create();
+
 	setup_camera();	
 
 	// Print a nice welcome message
@@ -374,7 +457,25 @@ int main(int argc, char ** argv)
 	// Stop robot
 	motor_ctrl_set_speed(0, 0);
 
+	//
+	// Close server socket and drop connections
+	//
 	broadcast_release();
+
+	//
+	// Dump log information to CSV file
+	//
+	char filename[64];
+	time_t now;
+	struct tm * timeinfo;
+
+	time(&now);
+	timeinfo = localtime(&now);
+	sprintf(filename, "run-%d-%d-%d-%d-%d-%d.csv", timeinfo->tm_mday, 
+		timeinfo->tm_mon + 1, timeinfo->tm_year + 1900, timeinfo->tm_hour, 
+		timeinfo->tm_min, timeinfo->tm_sec);
+
+	log_dump(logs, filename);
 
 	// Print some statistics.
 	// TODO: Calculate and show some statistics while running?
