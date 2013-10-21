@@ -140,8 +140,9 @@ int main(int argc, char* argv[])
     display = XOpenDisplay(NULL);
     visual = DefaultVisual(display, 0);
     
-    // Out-commented - no need to have a window open until we have a connection
-    //window = XCreateSimpleWindow(display, RootWindow(display, 0), 0, 0, WIDTH, 300, 1, 0, 0);
+    window = XCreateSimpleWindow(display, RootWindow(display, 0), 0, 0, WIDTH, 300, 1, 0, 0);
+    XMapWindow(display, window);
+    XFlush(display);
 
     if(visual->class!=TrueColor)
     {
@@ -186,9 +187,9 @@ int main(int argc, char* argv[])
                 printf("Connected!\n");
                 
                 // Create a new window    
-                window = XCreateSimpleWindow(display, RootWindow(display, 0), 0, 0, WIDTH, 300, 1, 0, 0);
-                XMapWindow(display, window);
-                XFlush(display);
+                //window = XCreateSimpleWindow(display, RootWindow(display, 0), 0, 0, WIDTH, 300, 1, 0, 0);
+                //XMapWindow(display, window);
+                //XFlush(display);
             
                 break;
             }
@@ -282,7 +283,7 @@ int main(int argc, char* argv[])
             }
             else
             {   
-                XDestroyWindow(display, window);
+                //XDestroyWindow(display, window);
                 break;
             }
         }

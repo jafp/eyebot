@@ -5,7 +5,7 @@
 /**
  * Initial speed of the motors
  */
-#define INITIAL_SPEED		28
+#define INITIAL_SPEED		70
 
 /**
  * Default name of the I2C bus on Raspberry Pi Rev. 2

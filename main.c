@@ -28,7 +28,7 @@
  * Camera
  */
 #define DEV					"/dev/video0"
-#define FPS 				60
+#define FPS 				30
 
 /**
  * Image size
@@ -47,7 +47,7 @@
 /**
  * Overall states for the state machine.
  */
-enum states_t {
+typedef enum {
 	WAITING,
 	GOTO_LINE,
 	FOLLOW_LINE,
@@ -55,12 +55,12 @@ enum states_t {
 	GOTO_WALL_AND_BACK,
 	FOLLOW_WALL,
 	TRACK_COMPLETE
-};
+} state_t;
 
 /**
  * Camera interface (see cam.h)
  */
-static struct camera * ctx;
+static struct camera * cam;
 
 /**
  * Buffer for temporary image data
@@ -75,7 +75,7 @@ static unsigned long frame_counter;
 /**
  * Current state.
  */
-//static states_t state;
+static state_t current_state;
 
 /** 
  * Variables used in the PID controller.
@@ -93,11 +93,11 @@ static int update_loop(int error, int x, int y, int mass);
 /**
  * Callback fired when a frame is ready.
  * 
- * \param ctx Pointer to the current camera context
+ * \param cam Pointer to the current camera context
  * \param frame Pointer to the frame data (planar image data)
  * \param length The of the frame data (in bytes, not pixels)
  */
-static void frame_callback(struct camera * ctx, void * frame, int length)
+static void frame_callback(struct camera * cam, void * frame, int length)
 {
 	int i, p = 0;
 	unsigned char v;
@@ -152,7 +152,7 @@ static void frame_callback(struct camera * ctx, void * frame, int length)
 	// Transmit every 4rd frame over sockets.
 	// This is 15 frames per second when we are capturing
 	// 60 frames per second from the camera.
-	if (frame_counter % 4 == 0)
+	if (frame_counter % 2 == 0)
 	{
 		broadcast_send(x, y, error, buffer);
 	}
@@ -195,13 +195,13 @@ static int update_loop(int error, int x, int y, int mass)
 {
 	static int I_sum = 0;
 
-	int Kp = 1, Ki = 0, Kd = 1, K_error = 10;
+	int Kp = 2, Ki = 1, Kd = 20, K_error = 10;
 	int P, I, D;
 	int correction;
 	unsigned char tacho_left, tacho_right;
 
 	// Get speed... We don't actually use it
-	motor_ctrl_get_speed(&tacho_left, &tacho_right);
+	//motor_ctrl_get_speed(&tacho_left, &tacho_right);
 
 	// Scale error down
 	error = error / K_error;
@@ -209,8 +209,11 @@ static int update_loop(int error, int x, int y, int mass)
 	// Calculate PID
 	P = error * Kp;
 
+	if (I_sum > 20) { I_sum = 20; }
+	if (I_sum < -20) { I_sum = -20; }
+
 	I_sum += error;
-	I = I_sum * Ki;
+	I = 0;//I_sum / 30;
 
 	D = (error - last_error) * Kd;
 	last_error = error;
@@ -225,6 +228,7 @@ static int update_loop(int error, int x, int y, int mass)
 	// Print a lot of useful stuff!
 	//printf("[%10d] speed: %4d %4d - error (image): %4d  - encoder: %3d, %3d - mass: %4d \n", 
 	//	frame_counter, speed_l, speed_r, error, enc_left, enc_right, mass);
+	printf("%4d %4d %4d %4d %4d %4d\n", error, P, I, D, correction, I_sum);
 	
 	//log_step(frame_counter, error, speed_l, speed_r, tacho_left, tacho_right, P, I, D, mass);
 
@@ -239,13 +243,78 @@ static int update_loop(int error, int x, int y, int mass)
  */
 static void sigint_handler(int signal)
 {
-	cam_end_loop(ctx);
+	cam_end_loop(cam);
 }
 
+/**
+ *
+ */
 static void * processing_thread_fn(void * ptr)
 {
-	cam_loop(ctx);
+	cam_loop(cam);
 	pthread_exit(0);
+}
+
+/**
+ *
+ */
+/*static void * shell_thread_fn(void * ptr)
+{
+	int i;
+	char buffer[255];
+
+	while (1)
+	{	
+		printf(" >> ");
+		if (fgets(buffer, 255, stdio) != NULL)
+		{	
+			// Skip empty line
+			if (buffer[0] == '\n')
+			{
+				continue;
+			}
+
+			// Remove newline at the end
+			for (i = 0; i < 255; i++)
+			{
+				if (buffer[i] == '\0' || buffer[i] == '\n')
+				{
+					buffer[i] = '\0';
+				}
+			}
+
+			if (strcmp(buffer, "start") == 0)
+			{
+
+			}
+			else if (strcmp(buffer, "stop") == 0)
+			{
+
+			}
+			else if (strcmp(buffer, "exit") == 0)
+			{
+
+			}
+		}
+	}
+}
+*/
+
+static void setup_camera()
+{
+	cam = (struct camera *) malloc(sizeof(struct camera));
+	if (cam == NULL)
+	{
+		printf("Could not allocate memory for camera interface, exiting...\n");
+		exit(-1);
+	}
+
+	// Camera configuration
+	cam->config.frame_cb = frame_callback;
+	cam->config.width = WIDTH;
+	cam->config.height = HEIGHT;
+	cam->config.fps = FPS;
+	cam->dev = DEV;
 }
 
 /**
@@ -256,25 +325,16 @@ int main(int argc, char ** argv)
 	pthread_t processing_thread, shell_thread;
 	struct addrinfo hints, *res;
 
-	ctx = (struct camera *) malloc(sizeof(struct camera));
-	if (ctx == NULL)
-	{
-		// We are out of memory...this never happens!
-	}
-
-	// Camera configuration
-	ctx->config.frame_cb = frame_callback;
-	ctx->config.width = WIDTH;
-	ctx->config.height = HEIGHT;
-	ctx->config.fps = FPS;
-	ctx->dev = DEV;
-
+	// Initialize variables
 	frame_counter = 0;
-	buffer = malloc(IMG_SIZE);
+	current_state = WAITING;
+	buffer = (unsigned char *) malloc(IMG_SIZE);
 
+	setup_camera();	
+
+	// Print a nice welcome message
 	printf("\n=== Eyecam ===\n");
-	printf("Config: w: %d, h: %d, fps (expected): %d\n", ctx->config.width, ctx->config.height, ctx->config.fps);
-
+	printf("Config: w: %d, h: %d, fps (expected): %d\n", cam->config.width, cam->config.height, cam->config.fps);
 
 	// Open i2c bus (by internally opening the i2c device driver)
 	if (i2c_bus_open() < 0)
@@ -287,8 +347,8 @@ int main(int argc, char ** argv)
 	signal(SIGINT, sigint_handler);
 
 	// Open camera and start capturing
-	cam_init(ctx);
-	cam_start_capturing(ctx);
+	cam_init(cam);
+	cam_start_capturing(cam);
 	
 	// Open TCP server socket, and start listening for connections	
 	broadcast_init();
@@ -298,7 +358,7 @@ int main(int argc, char ** argv)
 	motor_ctrl_set_speed(speed_l, speed_r);
 
 	// Create the main thread
-	if (pthread_create(&processing_thread, NULL, processing_thread_fn, ctx) < 0)
+	if (pthread_create(&processing_thread, NULL, processing_thread_fn, cam) < 0)
 	{
 		perror("pthread_create");
 		exit(-1);
@@ -308,8 +368,8 @@ int main(int argc, char ** argv)
 	pthread_join(processing_thread, NULL);
 	// TODO wait for shell thread
 	
-	cam_stop_capturing(ctx);
-	cam_uninit(ctx);
+	cam_stop_capturing(cam);
+	cam_uninit(cam);
 
 	// Stop robot
 	motor_ctrl_set_speed(0, 0);
@@ -318,7 +378,7 @@ int main(int argc, char ** argv)
 
 	// Print some statistics.
 	// TODO: Calculate and show some statistics while running?
-	printf("\nActual fps: %f\n", cam_get_measured_fps(ctx));
+	printf("\nActual fps: %f\n", cam_get_measured_fps(cam));
 	printf("Done.\n\n");
 
 	return 0;
