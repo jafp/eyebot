@@ -19,8 +19,9 @@
 #define QUEUE_SIZE          5
 
 typedef struct broadcast_packet {
-	int x, y;
-	int error;
+	int l_x, l_y, u_x, u_y;
+	int error_lower;
+	int error_upper;
 	int mass;
 	unsigned char * frame;
 } broadcast_packet_t;
@@ -78,15 +79,27 @@ static void signal_handler(int signal)
  */
 static int send_packet(const broadcast_packet_t * packet)
 {
-	if (send(socket_fd, &packet->x, sizeof(packet->x), 0) < 0)
+	if (send(socket_fd, &packet->l_x, sizeof(packet->l_x), 0) < 0)
 	{
 		return -1;
 	}
-	if (send(socket_fd, &packet->y, sizeof(packet->y), 0) < 0)
+	if (send(socket_fd, &packet->l_y, sizeof(packet->l_y), 0) < 0)
 	{
 		return -1;
 	}
-	if (send(socket_fd, &packet->error, sizeof(packet->error), 0) < 0)
+	if (send(socket_fd, &packet->u_x, sizeof(packet->u_x), 0) < 0)
+	{
+		return -1;
+	}
+	if (send(socket_fd, &packet->u_y, sizeof(packet->u_y), 0) < 0)
+	{
+		return -1;
+	}
+	if (send(socket_fd, &packet->error_lower, sizeof(packet->error_lower), 0) < 0)
+	{
+		return -1;
+	}
+	if (send(socket_fd, &packet->error_upper, sizeof(packet->error_upper), 0) < 0)
 	{
 		return -1;
 	}
@@ -130,6 +143,7 @@ static void * broadcast_thread(void * ptr)
 				// out of the loop to wait for a new connection.
 				//pthread_mutex_unlock(&frame_buffer_mtx);
 				ok = 0;
+				close(socket_fd);
 			}
 			else
 			{
@@ -162,11 +176,12 @@ int broadcast_init()
 
 void broadcast_release()
 {
+	close(socket_fd);
 	close(server_socket_fd);
-	// TODO
 }
 
-void broadcast_send(int x, int y, int error, unsigned char * buffer)
+void broadcast_send(int l_x, int l_y, int u_x, int u_y, int error_lower, 
+	int error_upper, int mass, unsigned char * buffer)
 {	
 	// Try locking the frame buffer mutex, and return if the lock could not be
 	// aquired. This means that the frame is skipped/ignored if the lock cannot
@@ -174,10 +189,13 @@ void broadcast_send(int x, int y, int error, unsigned char * buffer)
 	if (pthread_mutex_lock(&frame_buffer_mtx) == 0)
 	{	
 		// Populate packet with details
-		packet.x = x;
-		packet.y = y;
-		packet.error = error;
-		packet.mass = 0;
+		packet.l_x = l_x;
+		packet.l_y = l_y;
+		packet.u_x = u_x;
+		packet.u_y = u_y;
+		packet.error_lower = error_lower;
+		packet.error_upper = error_upper;
+		packet.mass = mass;
 		// Copy the image data
 		memcpy(packet.frame, buffer, IMAGE_PIXELS);
 

@@ -2,7 +2,9 @@
 eyecam
 viewer
 Makefile
+run-*.csv
 
 CMakeCache.txt
 CMakeFiles
 cmake_install.cmake
+

@@ -15,6 +15,8 @@ typedef struct log_fields {
 	float P;
 	float I;
 	float D;
+	
+	float correction;
 
 	int speed_left;
 	int speed_right;

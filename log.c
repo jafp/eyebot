@@ -70,19 +70,17 @@ int log_dump(log_list_t * log, const char * filename)
 	}
 
 	// Print header
-	fprintf(file, "Time,Frame,Error (lower),Error (upper),Mass,P,I,D,\
-		Speed (left),Speed (right),Speed Ref (left),Speed Ref (right),\
-		Tacho (left),Tacho (right)\n");
+	fprintf(file, "Time,Frame,Error (lower),Error (upper),Mass,P,I,D,Correction,Speed (left),Speed (right),Speed Ref (left),Speed Ref (right),Tacho (left),Tacho (right)\n");
 
 
 	log_entry_t * ptr = log->first;
 	while (ptr != log->last)
 	{	
-		fprintf(file, "%ld,%ld,%d,%d,%d,%f,%f,%f,%d,%d,%d,%d,%d,%d\n", 
+		fprintf(file, "%ld,%ld,%d,%d,%d,%f,%f,%f,%f,%d,%d,%d,%d,%d,%d\n", 
 			ptr->fields.time, ptr->fields.frame, ptr->fields.error_lower_x, 
 			ptr->fields.error_upper_x, ptr->fields.mass, ptr->fields.P, 
-			ptr->fields.I, ptr->fields.D, ptr->fields.speed_left, 
-			ptr->fields.speed_right,ptr->fields.speed_ref_left, 
+			ptr->fields.I, ptr->fields.D, ptr->fields.correction, 
+			ptr->fields.speed_left, ptr->fields.speed_right,ptr->fields.speed_ref_left, 
 			ptr->fields.speed_ref_right, ptr->fields.tacho_left,
 			ptr->fields.tacho_right);
 

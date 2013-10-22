@@ -12,24 +12,24 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 
-#define SERVER_PORT "24000"
-#define SERVER_HOSTNAME "10.42.0.20"
+#define SERVER_PORT         "24000"
+#define SERVER_HOSTNAME     "10.42.0.20"
 
 
-#define WIDTH 			320
-#define HEIGHT 			240
-#define CHANNELS 		4
-#define SIZE 			(WIDTH * HEIGHT)
-#define N_IMG_BYTES     (SIZE * CHANNELS)
+#define WIDTH 			    320
+#define HEIGHT 			    240
+#define CHANNELS 		    4
+#define SIZE 			    (WIDTH * HEIGHT)
+#define N_IMG_BYTES         (SIZE * CHANNELS)
 
 // Some kB extra space / padding for the receive buffer
-#define PADDING         4096
+#define PADDING             4096
 
 #define SOCKET_ERROR        -1
 #define BUFFER_SIZE         100
 #define QUEUE_SIZE          5
 
-#define B_LEN  76800
+#define B_LEN               76800
 
 static XImage * image;
 static Display *display;
@@ -84,7 +84,7 @@ static void copy_to_x_buffer(unsigned char * frame, unsigned int size)
     }
 }
 
-static void draw_center_point(int x, int y)
+static void draw_center_point(int x, int y, int rr, int gg, int bb)
 {
     int r, c, o, o1;
 
@@ -108,7 +108,7 @@ static void draw_center_point(int x, int y)
             o1 = get_pixel_offset(o);
             assert(o1 < N_IMG_BYTES);
 
-            set_pixel_value_at_off(o1, 0, 0, 255);
+            set_pixel_value_at_off(o1, rr, gg, bb);
         }
     }
 
@@ -163,8 +163,6 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    
-
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -173,24 +171,17 @@ int main(int argc, char* argv[])
     while (1)
     {
         printf("Connecting to EYEBOT! (%s:%s)\n", SERVER_HOSTNAME, SERVER_PORT);
+
         // Connect loop
         while (1)
         {
             if (connect(socket_fd, res->ai_addr, res->ai_addrlen) == -1)
             {
-                printf("Failed to connect - retrying!\n");
                 sleep(1);
-                //return 1;
             } 
             else
             {
                 printf("Connected!\n");
-                
-                // Create a new window    
-                //window = XCreateSimpleWindow(display, RootWindow(display, 0), 0, 0, WIDTH, 300, 1, 0, 0);
-                //XMapWindow(display, window);
-                //XFlush(display);
-            
                 break;
             }
         }
@@ -200,7 +191,8 @@ int main(int argc, char* argv[])
         {
             int bytes_read;
             int total = 0;
-            unsigned int x = 0, y = 0, error, mass;
+            unsigned int x = 0, y = 0, error, error_upper, mass;
+            int l_x, l_y, u_x, u_y;
 
             fd_set fds;
             FD_ZERO(&fds);
@@ -215,12 +207,22 @@ int main(int argc, char* argv[])
                 exitp("select()");
             }
 
-            if (read(socket_fd, &x, sizeof(x)) < 0)
+            if (read(socket_fd, &l_x, sizeof(l_x)) < 0)
             {
                 exitp("read() (error x)");
             }
 
-            if (read(socket_fd, &y, sizeof(y)) < 0)
+            if (read(socket_fd, &l_y, sizeof(l_y)) < 0)
+            {
+                exitp("read() (error y)");
+            }
+
+            if (read(socket_fd, &u_x, sizeof(u_x)) < 0)
+            {
+                exitp("read() (error x)");
+            }
+
+            if (read(socket_fd, &u_y, sizeof(u_y)) < 0)
             {
                 exitp("read() (error y)");
             }
@@ -229,6 +231,12 @@ int main(int argc, char* argv[])
             {
                 exitp("read() (error)");
             }
+
+            if (read(socket_fd, &error_upper, sizeof(error_upper)) < 0)
+            {
+                exitp("read() (error)");
+            }
+
 
             if (read(socket_fd, &mass, sizeof(mass)) < 0)
             {
@@ -250,7 +258,9 @@ int main(int argc, char* argv[])
             else if (bytes_read == SIZE)
             {
                 copy_to_x_buffer(read_buffer, bytes_read);
-                draw_center_point(x, y);
+
+                draw_center_point(l_x, l_y, 0, 0, 255);
+                draw_center_point(u_x, u_y, 0, 255, 0);
 
                 if (image != NULL)
                 {
@@ -265,33 +275,38 @@ int main(int argc, char* argv[])
                 image = XCreateImage(display, visual, 24, ZPixmap, 0, img_disp_buffer, 320, 240, 32, 0);
                 XPutImage(display, window, DefaultGC(display, 0), image, 0, 0, 0, 0, 320, 240);
 
-                XSetForeground(display, DefaultGC(display, 0), 0x00ffffff); // red
+                // Clear text area
+                XSetForeground(display, DefaultGC(display, 0), 0x00ffffff); 
                 XFillRectangle(display, window, DefaultGC(display, 0), 0, 240, 320, 60);
 
-                memset(b, 0, sizeof(b));
-                sprintf(b, "Center: (%d, %d)", x,y);
-            
-                XSetForeground(display, DefaultGC(display, 0), 0x00ff0000); // red
-                XDrawString(display, window, DefaultGC(display, 0), 5, 260, b, strlen(b));
+                // memset(b, 0, sizeof(b));
+                // sprintf(b, "Center: (%d, %d)", x,y);
+                // XSetForeground(display, DefaultGC(display, 0), 0x00ff0000); // red
+                // XDrawString(display, window, DefaultGC(display, 0), 5, 260, b, strlen(b));
 
                 memset(b, 0, sizeof(b));
-                sprintf(b, "Error: %d", error);
-            
-                XSetForeground(display, DefaultGC(display, 0), 0x000000ff); 
+                sprintf(b, "Error (upper): %d", error_upper);
+                XDrawString(display, window, DefaultGC(display, 0), 5, 250, b, strlen(b));
+
+                memset(b, 0, sizeof(b));
+                sprintf(b, "Error (lower): %d", error);
                 XDrawString(display, window, DefaultGC(display, 0), 5, 280, b, strlen(b));
-        
+
+                memset(b, 0, sizeof(b));
+                sprintf(b, "Mass: %d", mass);
+                XDrawString(display, window, DefaultGC(display, 0), 150, 250, b, strlen(b));
+
             }
             else
             {   
-                //XDestroyWindow(display, window);
+                printf("Connection lost - retrying!\n");
+                close(socket_fd);
                 break;
             }
         }
     }
 
-
 	printf("Closing the socket\n");
-    
     if(close(socket_fd) == -1)
     {
     	printf("Could not close socket\n");
