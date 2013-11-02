@@ -210,7 +210,7 @@ int broadcast_start()
 	server_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if(server_socket_fd == SOCKET_ERROR)
     {
-        printf("Could not make a socket\n");
+        printf("{broadcast] Could not make a socket\n");
         return 0;
     }
 
@@ -218,16 +218,23 @@ int broadcast_start()
     addr.sin_port = htons(port);
     addr.sin_family = AF_INET;
 
+    // Set SO_REUSEADDR to avoid "Address already in use" errors when trying
+    // to start the server after an unexpected exit
+	int optval = 1;
+	setsockopt(server_socket_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof optval);
+
+	// Bind to the address
     if(bind(server_socket_fd, (struct sockaddr *) &addr, sizeof(addr)) == SOCKET_ERROR)
     {
-        printf("Could not connect to host\n");
+        printf("[broadcast] Could not connect to host\n");
         return 0;
     }
 
+    // Finally listen
     getsockname(server_socket_fd, (struct sockaddr *) &addr, (socklen_t *) &addr_size);
     if(listen(server_socket_fd, QUEUE_SIZE) == SOCKET_ERROR)
     {
-        printf("Could not listen\n");
+        printf("[broadcast] Could not listen\n");
         return 0;
     }
 

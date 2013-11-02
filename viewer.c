@@ -254,6 +254,7 @@ int main(int argc, char* argv[])
             if (bytes_read < 0)
             {
                 perror("recv");
+                break;
             }
             else if (bytes_read == SIZE)
             {
@@ -281,7 +282,7 @@ int main(int argc, char* argv[])
 
                 // memset(b, 0, sizeof(b));
                 // sprintf(b, "Center: (%d, %d)", x,y);
-                // XSetForeground(display, DefaultGC(display, 0), 0x00ff0000); // red
+                XSetForeground(display, DefaultGC(display, 0), 0x00ff0000); // red
                 // XDrawString(display, window, DefaultGC(display, 0), 5, 260, b, strlen(b));
 
                 memset(b, 0, sizeof(b));

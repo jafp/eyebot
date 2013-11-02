@@ -13,14 +13,14 @@ struct __buffer {
     size_t  length;
 };
 
-struct cam_config {
+typedef struct cam_config {
 	unsigned int width;
 	unsigned int height;
 	unsigned int fps;	
 	void (*frame_cb)(struct camera *, void *, int length);
-};
+} cam_config_t;
 
-struct camera {
+typedef struct camera {
 	struct cam_config config;
 
 	int run;
@@ -31,7 +31,7 @@ struct camera {
 
 	struct timeval start, end;
 	unsigned long frame_count;
-};
+} camera_t;
 
 
 void cam_init(struct camera *);

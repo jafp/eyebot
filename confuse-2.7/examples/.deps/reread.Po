@@ -1,0 +1,135 @@
+reread.o: reread.c ../src/confuse.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/stdio.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/features.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/stdc-predef.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/predefs.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/sys/cdefs.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/wordsize.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/gnu/stubs.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/gnu/stubs-hard.h \
+ /home/jafp/x-tools/lib/gcc/arm-rpi-linux-gnueabi/4.7.3/include/stddef.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/types.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/typesizes.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/libio.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/_G_config.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/wchar.h \
+ /home/jafp/x-tools/lib/gcc/arm-rpi-linux-gnueabi/4.7.3/include/stdarg.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/stdio_lim.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sys_errlist.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/stdio.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/string.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/xlocale.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/string.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/string2.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/stdlib.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/signal.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sigset.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/signum.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/time.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/siginfo.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sigaction.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sigcontext.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/asm/sigcontext.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sigstack.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/sys/ucontext.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/pthreadtypes.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/endian.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/endian.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/byteswap.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/byteswap-16.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sigthread.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/unistd.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/posix_opt.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/environments.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/confname.h \
+ /home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/getopt.h
+
+../src/confuse.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/stdio.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/features.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/stdc-predef.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/predefs.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/sys/cdefs.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/wordsize.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/gnu/stubs.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/gnu/stubs-hard.h:
+
+/home/jafp/x-tools/lib/gcc/arm-rpi-linux-gnueabi/4.7.3/include/stddef.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/types.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/typesizes.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/libio.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/_G_config.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/wchar.h:
+
+/home/jafp/x-tools/lib/gcc/arm-rpi-linux-gnueabi/4.7.3/include/stdarg.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/stdio_lim.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sys_errlist.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/stdio.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/string.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/xlocale.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/string.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/string2.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/stdlib.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/signal.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sigset.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/signum.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/time.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/siginfo.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sigaction.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sigcontext.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/asm/sigcontext.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sigstack.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/sys/ucontext.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/pthreadtypes.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/endian.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/endian.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/byteswap.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/byteswap-16.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/sigthread.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/unistd.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/posix_opt.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/environments.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/bits/confname.h:
+
+/home/jafp/x-tools/arm-rpi-linux-gnueabi/sysroot/usr/include/getopt.h:

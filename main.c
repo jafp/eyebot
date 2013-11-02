@@ -1,5 +1,3 @@
-
-
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
@@ -16,31 +14,13 @@
 #include <pthread.h>
 
 #include "common.h"
+#include "configuration.h"
 #include "i2c.h"
 #include "broadcast.h"
 #include "motor_ctrl.h"
 #include "camera.h"
 #include "log.h"
 
-/**
- * PID controller constants
- */
-#define K_P 					2.0
-#define	K_I						0.0
-#define K_D						20.0
-
-#define K_ERROR 				0.1
-#define K_ERR_DIFF				0.2		
-
-#define K_MASS_LOWER			17000
-#define K_MASS_UPPER			21000
-#define K_MASS_SPEED_LIMITER	8
-
-/**
- * Camera
- */
-#define DEV						"/dev/video0"
-#define FPS 					30
 
 /**
  * Image size
@@ -52,20 +32,8 @@
 /** 
  * Image processing
  */
-#define THRESHOLD				145 //100
 #define FLOOR					255
 #define LINE					0
-
-#define SLICE_UPPER_START		0	
-#define SLICE_UPPER_END			60
-
-#define SLICE_LOWER_START		60
-#define SLICE_LOWER_END			240
-
-#define HIST_STRETCH_ENABLE		1
-#define HIST_STRETCH_START		40
-#define HIST_STRETCH_END		220
-#define HIST_FACTOR_A			(255 / (HIST_STRETCH_END - HIST_STRETCH_START))
 
 
 /**
@@ -87,9 +55,13 @@ typedef enum {
 	READY
 } goto_line_state_t;
 
-typedef struct point {
+/**
+ * Information about a `slice` of the image, 
+ * including mass of the line, error and so on.
+ */
+typedef struct slice {
 	int x, y, mass, error;
-} point_t;
+} slice_t;
 
 /**
  * List of log entries
@@ -99,7 +71,7 @@ static log_list_t * logs;
 /**
  * Camera interface (see cam.h)
  */
-static struct camera * cam;
+static camera_t * cam;
 
 /**
  * Buffer for temporary image data
@@ -121,27 +93,30 @@ static goto_line_state_t goto_line_state;
 /** 
  * Variables used in the PID controller.
  */
-static int speed_ref = INITIAL_SPEED;
-static int speed_l = INITIAL_SPEED;
-static int speed_r = INITIAL_SPEED;
+static int speed_ref;
+static int speed_l;
+static int speed_r;
 static float last_error = 0;
+static int I_sum = 0;
+static float k_p, k_i, k_d, k_error, k_error_diff;
+static float k_constrast, k_brightness;
+static int slice_upper_start, slice_upper_end, slice_lower_start, slice_lower_end;
+static int thr_enable, thr_lower, thr_upper;
 
-static float K_p = K_P;
-static float K_i = K_I;
-static float K_d = K_D;
-static float K_error = K_ERROR;
+
+static int cnt;
 
 /**
  * Function prototypes
  */
-static int update_loop(int mass, point_t * upper, point_t * lower);
+static int update_loop(int mass, slice_t * upper, slice_t * lower);
 
 
 /**
  * Calculate the "center of mass" of the given portion of the image,
  * given as an Y-offset and Y-length.
  */
-static void calculate_center_of_mass(point_t * pt, int y_offset_start, int y_offset_end)
+static void calculate_center_of_mass(slice_t * pt, int y_offset_start, int y_offset_end)
 {
 	int offset_start, offset_end, sum = 0, x = 0, y = 0, i;
 	pt->x = pt->y = pt->error = 0;
@@ -169,24 +144,70 @@ static void calculate_center_of_mass(point_t * pt, int y_offset_start, int y_off
 	pt->mass = sum;
 }
 
+static void extract_slice(int start, int end, int peak_split, int nice)
+{
+	int i;
+	int min, min_idx;
+	int histogram[256] = {0};
+	int peak_a_idx = 0, peak_a_max = 0;
+	int peak_b_idx = 0, peak_b_max = 0;
+
+	start = start * WIDTH;
+	end = end * WIDTH;
+
+
+	for (i = start; i < end; i++)
+	{
+		histogram[buffer[i]]++;
+	}
+
+	// Find peaks
+	for (i = 0; i < peak_split; i++)
+	{
+		if (histogram[i] > peak_a_max) 
+		{
+			peak_a_max = histogram[i];
+			peak_a_idx = i;
+		}
+	}
+
+	for (i = peak_split; i < 255; i++)
+	{
+		if (histogram[i] > peak_b_max) 
+		{
+			peak_b_max = histogram[i];
+			peak_b_idx = i;
+		}
+	}
+
+	min = peak_a_max, min_idx = 0;
+
+	for (i = peak_a_idx; i < peak_b_idx; i++)
+	{
+		if (histogram[i] < min)
+		{
+			min = histogram[i];
+			min_idx = i;
+		}
+	}			
+
+	for (i = start; i < end; i++)
+	{
+		buffer[i] = buffer[i] < (min_idx + nice) ? LINE : FLOOR;
+	}
+}	
+
+
 /** 
  * 
  */
 static void extract_line()
 {
-	// TODO Do some filtering of the image - maybe median filtering
-	// to remove all the noise
-
-	int i;
-	for (i = 0; i < IMG_SIZE; i++)
-	{
-		if (HIST_STRETCH_ENABLE)
-		{
-			buffer[i] = HIST_FACTOR_A * (buffer[i] - HIST_STRETCH_START);
-		}
-
-		buffer[i] = (buffer[i] < THRESHOLD) ? LINE : FLOOR;
-	}
+	extract_slice(0, 48, 100, 0);
+	extract_slice(48, 88, 100, 0);
+	extract_slice(88, 144, 100, 0);
+	extract_slice(144, 192, 100, 0);
+	extract_slice(192, 240, 100, 0);
 }
 
 
@@ -199,11 +220,10 @@ static void extract_line()
  */
 static void frame_callback(struct camera * cam, void * frame, int length)
 {
-	int i, p = 0;
-	unsigned char v;
+	int i;
 	unsigned char * ptr;
 	unsigned int count = 0;
-	point_t lower, upper;
+	slice_t lower, upper;
 
 	ptr = (unsigned char *) frame;
 
@@ -224,8 +244,7 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 	// Copy to working buffer
 	for (i = 0; i < IMG_SIZE; i++)
 	{
-		v = (*ptr);		
-		buffer[i] = v;
+		buffer[i] = (*ptr);
 		ptr += 2;
 	}
 
@@ -236,12 +255,12 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 	// Calculate center of mass at the upper half of the image.
 	// (this is where the line is farest away)
 	//
-	calculate_center_of_mass(&upper, SLICE_UPPER_START, SLICE_UPPER_END);
+	calculate_center_of_mass(&upper, slice_upper_start, slice_upper_end);
 
 	//
 	// Calculate center of mass at the lower half of the image
 	//
-	calculate_center_of_mass(&lower, SLICE_LOWER_START, SLICE_LOWER_START);
+	calculate_center_of_mass(&lower, slice_lower_start, slice_lower_end);
 
 	// Aggregated mass of line
 	count = upper.mass + lower.mass;
@@ -251,6 +270,7 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 	// 60 frames per second from the camera.
 	if (frame_counter % 3 == 0)
 	{
+		//printf("%d %d -- %d %d\n", lower.x, lower.y, upper.x, upper.y);
 		broadcast_send(lower.x, lower.y, upper.x, upper.y, lower.error, 
 			upper.error, count, buffer);
 	}
@@ -261,6 +281,9 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 	update_loop(count, &upper, &lower);
 }
 
+/**
+ *
+ */
 static unsigned char limit_speed(int speed)
 {	
 	if (speed > 255)
@@ -284,10 +307,8 @@ static unsigned char limit_speed(int speed)
  * \param x The calculated Y position of the center mass of the line
  * \param mass The number of pixels identified as the line
  */
-static int update_loop(int mass, point_t * upper, point_t * lower)
+static int update_loop(int mass, slice_t * upper, slice_t * lower)
 {
-	static int I_sum = 0;
-
 	switch (current_state)
 	{
 		case FOLLOW_LINE:
@@ -297,44 +318,60 @@ static int update_loop(int mass, point_t * upper, point_t * lower)
 			float err;
 			float correction;
 			float err_diff;
-			float mass_limiter;
-			unsigned char tacho_left, tacho_right;
+			float mass_pct;
+			float mass_limiter = 0.0;
+			unsigned char tacho_left = 0, tacho_right = 0;
+
+			// Initial speed reference
+			//speed_ref = speed;
 
 			if (current_state == FOLLOW_LINE_SPEEDY)
 			{
 				// TODO Increase speed!
 			}
 
+			// Percentage of the image which is identified as line (mass)
+			mass_pct = mass / IMG_SIZE * 100;
+			//if (mass_pct > 60.0)7
+			if (mass > 22000 && mass <  30000)
+			{
+				// Increase speed!!
+				printf("INCREASE!!\n");
+				//speed_ref = 70;
+			}
+
+			if (mass > 30000)
+			{
+				printf("WAIT!!\n");
+				//current_state = GOTO_WALL_AND_BACK;
+				//motor_ctrl_set_speed(0, 0);
+				//cnt = 0;
+				return;
+			}
+
 			// Get speed... We don't actually use it
 			// motor_ctrl_get_speed(&tacho_left, &tacho_right);
 
 			// Scale error down
-			err = lower->error * K_error; 
+			err = lower->error * k_error;
 			
 			//
 			// Calculate PID
 			//
-			P = err * K_p;
+			P = err * k_p;
+ 
+			I_sum = 0.5 * I_sum + err;
+			I = I_sum * k_i;
 
-			I_sum += err;
-			I = I_sum * K_i;
-
-			D = (err - last_error) * K_d;
+			D = (err - last_error) * k_d;
 			last_error = err;
 
 			// Total correction
 			correction = P + I + D;
 
 			// Limit speed if the line has big changes in direction 
-			//in the future
-			err_diff = abs(lower->error - upper->error) * K_ERR_DIFF;
-
-			// Limit speed if the mass of the line is either very small
-			// or very big
-			if (mass < K_MASS_LOWER || mass > K_MASS_UPPER)
-			{
-				mass_limiter += K_MASS_SPEED_LIMITER;
-			}
+			// in the future
+			err_diff = abs(lower->error - upper->error) * k_error_diff;
 
 			// Calculate new speed
 			speed_l = (int) round(speed_ref - err_diff - mass_limiter - correction);
@@ -419,11 +456,56 @@ static int update_loop(int mass, point_t * upper, point_t * lower)
 
 			break;
 		}
+		case GOTO_WALL_AND_BACK:
+		{
+			cnt++;
+			if (cnt > 100)
+			{
+				current_state = FOLLOW_LINE;
+			}
+			break;
+		}
 		default: 
 		{
 
 		}
 	}
+}
+
+/*
+static void print_ctrl_constants()
+{
+	printf("K_p = %.2f, K_i = %.2f, K_d = %.2f\n"
+			"K_error = %.2f, K_error_diff = %.2f\n"
+			"speed = %d\n", 
+			K_p, K_i, K_d, K_error, K_error_diff, speed_ref);
+}
+*/
+
+static void load_config()
+{
+	config_reload();
+
+	speed_ref = config_get_int("speed");
+
+	k_p = config_get_float("k_p");
+	k_i = config_get_float("k_i");
+	k_d = config_get_float("k_d");
+	k_error = config_get_float("k_error");
+	k_error_diff = config_get_float("k_error_diff");
+
+	k_constrast = config_get_float("k_constrast");
+	k_brightness = config_get_float("k_brightness");
+
+	slice_upper_start = config_get_int("slice_upper_start");
+	slice_upper_end = config_get_int("slice_upper_end");
+
+	slice_lower_start = config_get_int("slice_lower_start");
+	slice_lower_end = config_get_int("slice_lower_end");
+
+	thr_enable = config_get_int("thr_enable");
+	thr_upper = config_get_int("thr_upper");
+	thr_lower = config_get_int("thr_lower");
 }
 
 /**
@@ -477,9 +559,10 @@ static void * shell_thread_fn(void * ptr)
 			/**
 			 *
 			 */
-			if (strcmp(buffer, "start") == 0)
+			if (strcmp(buffer, "st") == 0)
 			{	
 				// Start motor at the initial speed
+				I_sum = 0;
 				motor_ctrl_set_speed(speed_l, speed_r);
 
 				current_state = FOLLOW_LINE;
@@ -487,10 +570,16 @@ static void * shell_thread_fn(void * ptr)
 			/**
 			 *
 			 */
-			else if (strcmp(buffer, "stop") == 0)
+			else if (strcmp(buffer, "s") == 0)
 			{
 				motor_ctrl_set_speed(0, 0);
 				current_state = WAITING;
+			}
+			
+			else if (strcmp(buffer, "r") == 0)
+			{
+				load_config();
+				printf("Constants reloaded\n");
 			}
 			/**
 			 *
@@ -500,52 +589,13 @@ static void * shell_thread_fn(void * ptr)
 				cam_end_loop(cam);
 				pthread_exit(0);
 			}
-			else if (strncmp(buffer, "speed", 5) == 0)
-			{
-				int s;
-				sscanf(buffer, "speed %d\n", &s);
-				speed_ref = s;
-				printf("Set speed ref to %d\n", s);
-			}
-			/**
-			 *
-			 */
-			else if (strcmp(buffer, "slow") == 0)
-			{
-				speed_ref -= 10;
-				printf("Speed ref set to %d\n", speed_ref);
-			}
-			/**
-			 *
-			 */
-			else if (strcmp(buffer, "fast") == 0)
-			{
-				speed_ref += 10;
-				printf("Speed ref set to %d\n", speed_ref);
-			}
+			
 			/**
 			 *
 			 */
 			else if (strcmp(buffer, "goto") == 0)
 			{
 				current_state = GOTO_LINE;
-			}
-			/**
-			 *
-			 */
-			else if (strcmp(buffer, "show") == 0)
-			{
-				printf("K_p = %.2f, K_i = %.2f, K_d = %.2f, K_e = %.2f\n", 
-					K_p, K_i, K_d, K_error);
-			}
-			/**
-			 *
-			 */
-			else if (strncmp(buffer, "set", 3) == 0)
-			{
-				sscanf(buffer, "set %f %f %f %f", &K_p, &K_i, &K_d, &K_error);
-				printf("Updated constants - K_p = %.2f, K_i = %.2f, K_d = %.2f, K_e = %.2f\n", 
-					K_p, K_i, K_d, K_error);
 			}
 			else
 			{
@@ -568,9 +618,10 @@ static void setup_camera()
 	cam->config.frame_cb = frame_callback;
 	cam->config.width = WIDTH;
 	cam->config.height = HEIGHT;
-	cam->config.fps = FPS;
-	cam->dev = DEV;
+	cam->config.fps = config_get_int("fps");
+	cam->dev = config_get_str("device");
 }
+
 
 /**
  * Main entry point.
@@ -585,14 +636,15 @@ int main(int argc, char ** argv)
 	current_state = WAITING;
 	buffer = (unsigned char *) malloc(IMG_SIZE);
 
+	// Init and load the configuration file
+	config_init();
+	load_config();
+
 	// Allocate and initialize the logging system
 	logs = log_create();
 
+	// Setup camera
 	setup_camera();	
-
-	// Print a nice welcome message
-	printf("\n=== Eyecam ===\n");
-	printf("Config: w: %d, h: %d, fps (expected): %d\n", cam->config.width, cam->config.height, cam->config.fps);
 
 	// Open i2c bus (by internally opening the i2c device driver)
 	if (i2c_bus_open() < 0)
@@ -600,6 +652,10 @@ int main(int argc, char ** argv)
 		printf("Failed opening I2C bus, exiting...\n");
 		exit(-1);
 	}
+
+	// Print a nice welcome message
+	printf("\n=== Eyecam ===\n");
+	printf("Config: w: %d, h: %d, fps (expected): %d\n", cam->config.width, cam->config.height, cam->config.fps);
 
 	// Catch CTRL-C signal and end looping
 	signal(SIGINT, sigint_handler);
@@ -628,9 +684,7 @@ int main(int argc, char ** argv)
 	// Stop robot
 	motor_ctrl_set_speed(0, 0);
 
-	//
 	// Close server socket and drop connections
-	//
 	broadcast_release();
 
 	//
@@ -646,8 +700,8 @@ int main(int argc, char ** argv)
 		timeinfo->tm_mon + 1, timeinfo->tm_year + 1900, timeinfo->tm_hour, 
 		timeinfo->tm_min, timeinfo->tm_sec);
 
-	printf("Logging run data to %s\n", filename);
-	log_dump(logs, filename);
+	//printf("Logging run data to %s\n", filename);
+	//log_dump(logs, filename);
 
 	// Print some statistics.
 	// TODO: Calculate and show some statistics while running?

@@ -2,10 +2,7 @@
 #ifndef _COMMON_H_
 #define _COMMON_H_
 
-/**
- * Initial speed of the motors
- */
-#define INITIAL_SPEED		35
+#define CONFIG_FILE		"eyebot.conf"
 
 /**
  * Default name of the I2C bus on Raspberry Pi Rev. 2
