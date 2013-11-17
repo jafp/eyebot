@@ -24,7 +24,10 @@ static cfg_opt_t opts[] =
 	CFG_FLOAT("k_d", 0.0, 0),
 	CFG_FLOAT("k_error", 0.0, 0),
 	CFG_FLOAT("k_error_diff", 0.0, 0),
+
 	CFG_INT("speed", 0, 0),
+	CFG_INT("speed_slow", 0, 0),
+	CFG_INT("speed_fast", 0, 0),
 
 	CFG_INT("slice_upper_start", 0, 0),
 	CFG_INT("slice_upper_end", 0, 0),
@@ -37,6 +40,15 @@ static cfg_opt_t opts[] =
 	CFG_INT("thr_enable", 0, 0),
 	CFG_INT("thr_upper", 0, 0),
 	CFG_INT("thr_lower", 0, 0),
+
+	CFG_INT("mass_horizontal_lower", 0, 0),
+	CFG_INT("mass_horizontal_upper", 0, 0),
+	CFG_INT("mass_cross_lower", 0, 0),
+	CFG_INT("mass_cross_upper", 0, 0),
+	CFG_INT("mass_bypath_lower", 0, 0),
+	CFG_INT("mass_bypath_upper", 0, 0),
+	CFG_INT("mass_end_lower", 0, 0),
+	CFG_INT("mass_end_upper", 0, 0),
 
 	CFG_END()
 };

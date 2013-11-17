@@ -1,4 +1,5 @@
 #include <sys/types.h>
+#include <sys/time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
@@ -13,7 +14,7 @@
 #include <X11/Xutil.h>
 
 #define SERVER_PORT         "24000"
-#define SERVER_HOSTNAME     "10.42.0.20"
+#define SERVER_HOSTNAME     "10.42.0.71"
 
 
 #define WIDTH 			    320
@@ -21,6 +22,10 @@
 #define CHANNELS 		    4
 #define SIZE 			    (WIDTH * HEIGHT)
 #define N_IMG_BYTES         (SIZE * CHANNELS)
+
+#define UP_W                640
+#define UP_H                480
+#define UP_S                (UP_W * UP_H)
 
 // Some kB extra space / padding for the receive buffer
 #define PADDING             4096
@@ -42,10 +47,20 @@ static unsigned char * img_disp_buffer;
 // Buffer used when reading the image over socket
 static unsigned char * read_buffer;//[WIDTH * HEIGHT + PADDING];
 
+static unsigned char * scaled_up_img;
+static unsigned char * scaled_up_img_dbl;
 
 static int get_pixel_offset(int pixel_pos)
 {
 	return pixel_pos * CHANNELS;
+}
+
+static void set_pix(int o, unsigned char r, unsigned char g, unsigned char b)
+{
+    scaled_up_img[o] = b;
+    scaled_up_img[o+1] = g;
+    scaled_up_img[o+2] = r;
+    scaled_up_img[o+3] = 0;
 }
 
 static void set_pixel_value_at_off(int off, unsigned char r, unsigned char g, unsigned char b)
@@ -57,6 +72,7 @@ static void set_pixel_value_at_off(int off, unsigned char r, unsigned char g, un
     img_buffer[off+1] = g;
     img_buffer[off+2] = r;
     img_buffer[off+3] = 0;
+
 }
 
 
@@ -111,13 +127,101 @@ static void draw_center_point(int x, int y, int rr, int gg, int bb)
             set_pixel_value_at_off(o1, rr, gg, bb);
         }
     }
+}
 
-    // Draw the red center line
-    int middle = WIDTH / 2;
+static void draw_center_point2(int x, int y, int rr, int gg, int bb)
+{
+    int r, c, o, o1;
+
+    // Skip drawing the point if is so close to the border
+    // that we cannot draw a 10x10 dot
+    if (x > (UP_W - 5) || x < 5 || y > (UP_H - 5) || y < 5)
+    {   
+        return;
+    }
+
+    // Draw the blue center point
+    for (r = y - 5; r < y + 5; r++)
+    {
+        //o = r * WIDTH * 4;
+        for (c = x - 5; c < x + 5; c++)
+        {   
+            // Calculate pixel offet
+            o = r * UP_W + c;
+            assert(o < UP_S);
+
+            o1 = o * CHANNELS;
+            set_pix(o1, rr, gg, bb);
+        }
+    }
+}
+
+
+static void draw_center_lines()
+{
+    int r, o, m;
+
+    // Draw the red center line vertical
+    m = WIDTH / 2;
     for (r = 0; r < 240; r++)
     {
-    	o = ((r * WIDTH) + middle);
-    	set_pixel_value_at_off(get_pixel_offset(o), 255, 0, 0);
+        o = ((r * WIDTH) + m);
+        set_pixel_value_at_off(get_pixel_offset(o), 255, 0, 0);
+    }
+
+    // Draw the red center line horizontal
+    m = HEIGHT / 2;
+    for (r = 0; r < 320; r++)
+    {
+        o = m * WIDTH + r;
+        set_pixel_value_at_off(get_pixel_offset(o), 255, 0, 0);
+    }
+}
+
+static void draw_center_lines2()
+{
+    int r, o, m;
+
+    // Draw the red center line vertical
+    m = UP_W / 2;
+    for (r = 0; r < UP_H; r++)
+    {
+        o = (r * UP_W + m) * CHANNELS;
+        //set_pixel_value_at_off(get_pixel_offset(o), 255, 0, 0);
+        set_pix(o, 255, 0, 0);
+    }
+
+    // Draw the red center line horizontal
+    m = UP_H / 2;
+    for (r = 0; r < UP_W; r++)
+    {
+        o = (m * UP_W + r) * CHANNELS;
+        set_pix(o, 255, 0, 0);
+        //set_pixel_value_at_off(get_pixel_offset(o), 255, 0, 0);
+
+    }
+}
+
+
+static void upscale_image()
+{
+    int x, y, o, no;
+    unsigned char p;
+
+    for (y = 0; y < HEIGHT; y++)
+    {
+        for (x = 0; x < WIDTH; x++)
+        {
+            o = y * WIDTH + x;
+            p = read_buffer[o];
+
+            no = 2*y*UP_W + x*2;
+
+            set_pix(no, p, p, p);
+            set_pix(no+1, p, p, p);
+            set_pix(no+UP_W, p, p, p);
+            set_pix(no+1+UP_W, p, p, p);
+        }
     }
 }
 
@@ -129,18 +233,24 @@ static exitp(const char * msg)
 
 int main(int argc, char* argv[])
 {
+    struct timeval begin, now;
+    long counter;
+
     printf("\n -- EYEBOT Viewer -- \n\n");
 
     // Allocate buffers
     img_buffer = malloc(SIZE * CHANNELS);
     read_buffer = malloc(SIZE + PADDING);
 
+    scaled_up_img = malloc(UP_S * CHANNELS);
+    scaled_up_img_dbl = malloc(UP_S * CHANNELS);
+
     unsigned char b[4096];
 
     display = XOpenDisplay(NULL);
     visual = DefaultVisual(display, 0);
     
-    window = XCreateSimpleWindow(display, RootWindow(display, 0), 0, 0, WIDTH, 300, 1, 0, 0);
+    window = XCreateSimpleWindow(display, RootWindow(display, 0), 0, 0, 320, 300, 1, 0, 0);
     XMapWindow(display, window);
     XFlush(display);
 
@@ -168,6 +278,19 @@ int main(int argc, char* argv[])
     hints.ai_socktype = SOCK_STREAM;
     getaddrinfo(SERVER_HOSTNAME, SERVER_PORT, &hints, &res);
 
+    sleep(1);
+    memset(b, 0, sizeof(b));
+    sprintf(b, "Eyebot Line Follower - LiveEye");
+    XSetForeground(display, DefaultGC(display, 0), 0x00ff0000); // red
+    XDrawString(display, window, DefaultGC(display, 0), 10, 20, b, strlen(b));
+    
+    memset(b, 0, sizeof(b));
+    sprintf(b, "Copyright (C) 2013 Andre Christensen and Jacob Pedersen");
+    XSetForeground(display, DefaultGC(display, 0), 0x000000EF); // red
+    XDrawString(display, window, DefaultGC(display, 0), 10, 35, b, strlen(b));
+
+    XFlush(display);
+
     while (1)
     {
         printf("Connecting to EYEBOT! (%s:%s)\n", SERVER_HOSTNAME, SERVER_PORT);
@@ -185,6 +308,17 @@ int main(int argc, char* argv[])
                 break;
             }
         }
+
+        // Two seconds of timeout. Useful so that recv doesn't wait 
+        // forever to receive all its bytes.
+        struct timeval tv;
+        tv.tv_sec = 2;  
+        tv.tv_usec = 0; 
+        setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(struct timeval));
+
+        // Measure time at beginning
+        counter = 0;
+        gettimeofday(&begin, NULL);
 
         // Frame update loop
         while (1)
@@ -259,22 +393,36 @@ int main(int argc, char* argv[])
             else if (bytes_read == SIZE)
             {
                 copy_to_x_buffer(read_buffer, bytes_read);
-
                 draw_center_point(l_x, l_y, 0, 0, 255);
                 draw_center_point(u_x, u_y, 0, 255, 0);
+                draw_center_lines();
+
+                //upscale_image();
 
                 if (image != NULL)
                 {
                     XDestroyImage(image);
                 }
 
+                //upscale_image();
+                //draw_center_point2(l_x, l_y, 0, 0, 255);
+                //draw_center_point2(u_x, u_y, 0, 255, 0);
+                //draw_center_lines2();
+
+                //scaled_up_img_dbl = malloc(UP_S * CHANNELS);
+                //memcpy(scaled_up_img_dbl, scaled_up_img, UP_S * CHANNELS);
+
+
                 // Allocate a new buffer for next frame. 
                 // The old one is freed by XDestroyImage
                 img_disp_buffer = (unsigned char *) malloc(SIZE * CHANNELS);
                 memcpy(img_disp_buffer, img_buffer, SIZE * CHANNELS);
-
+                
                 image = XCreateImage(display, visual, 24, ZPixmap, 0, img_disp_buffer, 320, 240, 32, 0);
                 XPutImage(display, window, DefaultGC(display, 0), image, 0, 0, 0, 0, 320, 240);
+
+                //image = XCreateImage(display, visual, 24, ZPixmap, 0, scaled_up_img_dbl, 640, 480, 32, 0);
+                //XPutImage(display, window, DefaultGC(display, 0), image, 0, 0, 0, 0, 640, 480);
 
                 // Clear text area
                 XSetForeground(display, DefaultGC(display, 0), 0x00ffffff); 
@@ -297,6 +445,17 @@ int main(int argc, char* argv[])
                 sprintf(b, "Mass: %d", mass);
                 XDrawString(display, window, DefaultGC(display, 0), 150, 250, b, strlen(b));
 
+
+                // Calculate and display fps
+                gettimeofday(&now, NULL);
+                double  elapsed = (now.tv_sec - begin.tv_sec) * 1000.0;
+                elapsed += (now.tv_usec - begin.tv_usec) / 1000.0;
+                elapsed /= 1000.0;
+                memset(b, 0, sizeof(b));
+                sprintf(b, "FPS: %.2f", ((counter / elapsed) * 3));
+                XDrawString(display, window, DefaultGC(display, 0), 150, 280, b, strlen(b));
+
+                counter++;
             }
             else
             {   

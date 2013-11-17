@@ -35,25 +35,31 @@
 #define FLOOR					255
 #define LINE					0
 
+#define INDEX(y)				( y * WIDTH )
+
+#define T 						0.033
+
+#define T_90_DEG				1300000
+#define T_180_DEG				2600000
+
+#define PI 						3.14159265
 
 /**
  * Overall states for the state machine.
  */
 typedef enum {
+	CALIBRATE,
 	WAITING,
 	GOTO_LINE,
+	GOTO_LINE_TURN_LEFT,
 	FOLLOW_LINE,
+	BRAKE_DOWN,
 	FOLLOW_LINE_SPEEDY,
+	FOLLOW_LINE_AFTER_WALL,
 	GOTO_WALL_AND_BACK,
 	FOLLOW_WALL,
 	TRACK_COMPLETE
 } state_t;
-
-typedef enum {
-	GO_STRAIGTH,
-	TURN_RIGHT,
-	READY
-} goto_line_state_t;
 
 /**
  * Information about a `slice` of the image, 
@@ -62,6 +68,22 @@ typedef enum {
 typedef struct slice {
 	int x, y, mass, error;
 } slice_t;
+
+typedef struct img_part {
+	int length;
+	unsigned char * data;
+} img_part_t;
+
+
+int dilation_mask[4][4] = {
+	{ 0, 1, 1, 0 },
+	{ 1, 1, 1, 1 },
+	{ 1, 1, 1, 1 },
+	{ 0, 1, 1, 0 }
+};
+
+int dilation_mask_n = 4;
+
 
 /**
  * List of log entries
@@ -88,29 +110,73 @@ static unsigned long frame_counter;
  */
 static state_t current_state;
 
-static goto_line_state_t goto_line_state;
 
 /** 
  * Variables used in the PID controller.
  */
-static int speed_ref;
+static int speed_ref, speed_ref_slow, speed_ref_fast;
+
+
 static int speed_l;
 static int speed_r;
 static float last_error = 0;
+static float last_correction = 0;
 static int I_sum = 0;
 static float k_p, k_i, k_d, k_error, k_error_diff;
 static float k_constrast, k_brightness;
 static int slice_upper_start, slice_upper_end, slice_lower_start, slice_lower_end;
 static int thr_enable, thr_lower, thr_upper;
 
-
 static int cnt;
+
+/**
+ * Variables containing masses for different types of line intersections
+ */
+static int mass_horizontal_lower, mass_horizontal_upper;
+static int mass_cross_lower, mass_cross_upper;
+static int mass_bypath_lower, mass_bypath_upper;
+
+#define MASS_AVG_CNT	2
+
+static int latest_masses[MASS_AVG_CNT];
+static int latest_mass_idx = 0;
 
 /**
  * Function prototypes
  */
 static int update_loop(int mass, slice_t * upper, slice_t * lower);
 
+static void reset()
+{
+	int i;
+
+	latest_mass_idx = 0;
+	for (i = 0; i < MASS_AVG_CNT; i++)
+	{
+		latest_masses[i] = 0;
+	}
+	
+	motor_ctrl_forward();
+	I_sum = 0;
+}
+
+/**
+ * 
+ */
+static int add_mass(int mass)
+{
+	int i, sum = 0;
+	latest_masses[latest_mass_idx++] = mass;
+	if (latest_mass_idx == MASS_AVG_CNT)
+	{
+		latest_mass_idx = 0;
+	}
+	for (i = 0; i < MASS_AVG_CNT; i++)
+	{
+		sum += latest_masses[i];
+	}
+	return sum / MASS_AVG_CNT;
+}
 
 /**
  * Calculate the "center of mass" of the given portion of the image,
@@ -144,67 +210,181 @@ static void calculate_center_of_mass(slice_t * pt, int y_offset_start, int y_off
 	pt->mass = sum;
 }
 
-static void extract_slice(int start, int end, int peak_split, int nice)
+/**
+ * Calculates histogram.
+ *
+ * \param hist Pointer to float array where to put the histogram
+ * \param start Start row
+ * \param end End row
+ */
+static void histogram(float * hist, int start, int end)
 {
 	int i;
-	int min, min_idx;
-	int histogram[256] = {0};
-	int peak_a_idx = 0, peak_a_max = 0;
-	int peak_b_idx = 0, peak_b_max = 0;
-
-	start = start * WIDTH;
-	end = end * WIDTH;
-
+	int ihist[256] = {0};
+	
+	start = INDEX(start);
+	end = INDEX(end);
 
 	for (i = start; i < end; i++)
 	{
-		histogram[buffer[i]]++;
+		ihist[buffer[i]]++;
+	}
+	for (i = 0; i < 256; i++)
+	{
+		hist[i] = (float)ihist[i] / (float)(end - start);
+	}
+}
+
+/**
+ * Optimum Thresholding algorithm from `The Pocket Handbook of Image 
+ * Processing Algorithms in C`.
+ *
+ * \param start Start row (0 - HEIGHT)
+ * \param end End row (0 - HEIGHT)
+ */
+static void optimum_thresholding(int start, int end, int nice)
+{
+	int y, x, j, flag, thr;
+
+	float sum;
+	float hist[256];
+	
+	
+	histogram(hist, start, end);
+
+	for (y = 0; y < 256; y++)
+	{
+		j = 0;
+		sum = 0;
+		for (x = -15; x <= 15; x++)
+		{
+			j++;
+			if ((y-x) >= 0)
+			{
+				sum = sum + hist[y-x];
+			}
+		}
+		hist[y] = sum / (float) j;
 	}
 
-	// Find peaks
-	for (i = 0; i < peak_split; i++)
+	y = 50; //50 for normal track
+	thr = 0;
+	flag = 0;
+
+	while (flag == 0 && y < 254)
 	{
-		if (histogram[i] > peak_a_max) 
+		if (hist[y-1] >= hist[y] && hist[y] < hist[y+1]) 
 		{
-			peak_a_max = histogram[i];
-			peak_a_idx = i;
+			flag = 1;
+			thr = y;
+		}
+		y++;
+	}
+	
+	start = INDEX(start);
+	end = INDEX(end);
+	thr += nice;
+	//thr = thr_lower;
+	for (j = start; j < end; j++)
+	{
+		buffer[j] = buffer[j] < thr ? LINE : FLOOR;
+	}
+}
+
+static void constrast()
+{
+	int i, tmp;
+	for (i = 0; i < IMG_SIZE; i++)
+	{
+		tmp = buffer[i] * k_constrast;
+		if (tmp > 255)
+		{
+			buffer[i] = 255;
+		}
+		else if (tmp < 0)
+		{
+			buffer[i] = 0;
+		}
+		else
+		{
+			buffer[i] = (unsigned char)tmp;
 		}
 	}
+}
 
-	for (i = peak_split; i < 255; i++)
+static void dilation(int N, int mask[N][N])
+{
+	int y, x, i, j, smax, off;
+	int n = N/2;
+	for (y = n; y < HEIGHT - n; y++)
 	{
-		if (histogram[i] > peak_b_max) 
+		for (x = n; x < WIDTH - n; x++)
 		{
-			peak_b_max = histogram[i];
-			peak_b_idx = i;
+			off = x + y * WIDTH;
+			smax = FLOOR;
+			for (j = -n; j < n; j++)
+			{
+				for (i = -n; i < n; i++)
+				{
+					if (mask[i+n][j+n] == 1)
+					{
+						if (buffer[off] == LINE)
+						{
+							smax = LINE;
+							break;
+						}
+					}
+				}
+				if (smax == LINE)
+				{
+					break;
+				}
+			}
+			buffer[off] = smax;
 		}
 	}
+}
 
-	min = peak_a_max, min_idx = 0;
+/**
+ * Calculate the robot's angle relative to the line.
+ *
+ * \param upper
+ * \param lower
+ */
+static double angle_to_line(slice_t * upper, slice_t * lower)
+{
+	int x1, y1, x2, y2;
 
-	for (i = peak_a_idx; i < peak_b_idx; i++)
+	// Return zero in case no line at all is found
+	if (upper->x == 0 || upper->y == 0 || lower->x == 0 || lower->y == 0)
 	{
-		if (histogram[i] < min)
-		{
-			min = histogram[i];
-			min_idx = i;
-		}
-	}			
-
-	for (i = start; i < end; i++)
-	{
-		buffer[i] = buffer[i] < (min_idx + nice) ? LINE : FLOOR;
+		return 0;
 	}
-}	
 
+	x1 = upper->x - lower->x;
+	y1 = upper->y - lower->y;
+
+	x2 = lower->x;
+	y2 = 0;
+
+	// Calculate and return angle in degrees
+	return ( (x1*x2+y1*y2) / (sqrt(x1*x1+y1*y1) * sqrt(x2*x2+y2*y2)) ) * (180/PI);
+}
+
+
+static void extract_slice(int start, int end, int peak_split, int nice)
+{
+	optimum_thresholding(start, end, nice);
+	//dilation(dilation_mask_n, dilation_mask);
+}
 
 /** 
  * 
  */
 static void extract_line()
 {
-	extract_slice(0, 48, 100, 0);
-	extract_slice(48, 88, 100, 0);
+	extract_slice(0, 44, 100, 0);
+	extract_slice(44, 88, 100, 0);
 	extract_slice(88, 144, 100, 0);
 	extract_slice(144, 192, 100, 0);
 	extract_slice(192, 240, 100, 0);
@@ -223,6 +403,7 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 	int i;
 	unsigned char * ptr;
 	unsigned int count = 0;
+	int avg_mass;
 	slice_t lower, upper;
 
 	ptr = (unsigned char *) frame;
@@ -241,29 +422,36 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 	//
 	//  - ...
 
+	int tmp;
 	// Copy to working buffer
 	for (i = 0; i < IMG_SIZE; i++)
 	{
-		buffer[i] = (*ptr);
+		//tmp = (int)(*ptr) *  k_constrast + k_brightness;
+		buffer[i] = (*ptr);//tmp > 255 ? 255 : tmp;
 		ptr += 2;
 	}
 
-	// Extract line
-	extract_line();
+	if (current_state != CALIBRATE)
+	{
+		// Extract line
+		extract_line();
 
-	// 
-	// Calculate center of mass at the upper half of the image.
-	// (this is where the line is farest away)
-	//
-	calculate_center_of_mass(&upper, slice_upper_start, slice_upper_end);
+		// 
+		// Calculate center of mass at the upper half of the image.
+		// (this is where the line is farest away)
+		//
+		calculate_center_of_mass(&upper, slice_upper_start, slice_upper_end);
 
-	//
-	// Calculate center of mass at the lower half of the image
-	//
-	calculate_center_of_mass(&lower, slice_lower_start, slice_lower_end);
+		//
+		// Calculate center of mass at the lower half of the image
+		//
+		calculate_center_of_mass(&lower, slice_lower_start, slice_lower_end);
 
-	// Aggregated mass of line
-	count = upper.mass + lower.mass;
+		// Aggregated mass of line
+		count = upper.mass + lower.mass;
+	}
+
+	avg_mass = add_mass(count);
 
 	// Transmit every 4rd frame over sockets.
 	// This is 15 frames per second when we are capturing
@@ -272,13 +460,13 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 	{
 		//printf("%d %d -- %d %d\n", lower.x, lower.y, upper.x, upper.y);
 		broadcast_send(lower.x, lower.y, upper.x, upper.y, lower.error, 
-			upper.error, count, buffer);
+			upper.error, avg_mass, buffer);
 	}
 
 	frame_counter++;
 
 	// Dispatch the updating to another function
-	update_loop(count, &upper, &lower);
+	update_loop(avg_mass, &upper, &lower);
 }
 
 /**
@@ -297,6 +485,84 @@ static unsigned char limit_speed(int speed)
 	return speed;
 }
 
+static void pid_controller(int mass, slice_t * upper, slice_t * lower, int speed,
+	float Kerr, float Kp, float Ki, float Kd)
+{
+		float P, I, D;
+		float err;
+		float correction;
+		float err_diff;
+		float mass_pct;
+		int mass_limiter = 0;
+		unsigned char tacho_left = 0, tacho_right = 0;
+
+		// Scale error down
+		err = lower->error * Kerr;
+	
+		//
+		// Calculate PID
+		//
+		P = err * Kp;
+
+		I_sum = (0.5 * I_sum) + err;
+		//I = (0.5 * last_correction) + T * k_i * err;
+		I = I_sum * Ki;
+
+
+		//D = (k_d/T) * (err - last_error);
+		D = Kd * (err - last_error);
+		last_error = err;
+
+		// Total correction
+		correction = P + I + D;
+		last_correction = correction;
+
+		// Limit speed if the line has big changes in direction 
+		// in the future
+		err_diff = abs(lower->error - upper->error) * k_error_diff;
+
+		// Calculate new speed
+		speed_l = (int) round(speed - err_diff - correction);
+		speed_r = (int) round(speed - err_diff + correction);
+
+		printf("> %4f %4f %4d %4d\n", correction, err, speed_l, speed_r);
+
+		// Send new speeds to motor controller
+		// (Each speed is limited to the interval 0-255 (unsigned 8-bit number))
+		motor_ctrl_set_speed(limit_speed(speed_l), limit_speed(speed_r));
+
+		//
+		// Add log entry
+		//
+
+		log_entry_t * entry = log_entry_create();
+		log_fields_t * f = &entry->fields;
+
+		f->time = 0;
+		f->frame = frame_counter;
+
+		f->error_lower_x = lower->error;
+		f->error_upper_x = upper->error;
+		f->mass = mass;
+
+		f->P = P;
+		f->I = I;
+		f->D = D;
+		f->correction = correction;
+
+		f->speed_left = speed_l;
+		f->speed_right = speed_r;
+
+		f->speed_ref_left = speed;
+		f->speed_ref_right = speed;
+
+		f->tacho_left = (int) tacho_left;
+		f->tacho_right = (int) tacho_right;
+
+		log_add(logs, entry);	
+
+}
+
 /**
  * Update loop callback. Called whenever a new image has been processed.
  * From this point, it's all about calculating new speeds for the motors,
@@ -309,161 +575,174 @@ static unsigned char limit_speed(int speed)
  */
 static int update_loop(int mass, slice_t * upper, slice_t * lower)
 {
+	// TODO Seperate variable for the "normal" speed!!
 	switch (current_state)
 	{
-		case FOLLOW_LINE:
-		case FOLLOW_LINE_SPEEDY:
+		case CALIBRATE:
 		{
-			float P, I, D;
-			float err;
-			float correction;
-			float err_diff;
-			float mass_pct;
-			float mass_limiter = 0.0;
-			unsigned char tacho_left = 0, tacho_right = 0;
-
-			// Initial speed reference
-			//speed_ref = speed;
-
-			if (current_state == FOLLOW_LINE_SPEEDY)
-			{
-				// TODO Increase speed!
-			}
-
-			// Percentage of the image which is identified as line (mass)
-			mass_pct = mass / IMG_SIZE * 100;
-			//if (mass_pct > 60.0)7
-			if (mass > 22000 && mass <  30000)
-			{
-				// Increase speed!!
-				printf("INCREASE!!\n");
-				//speed_ref = 70;
-			}
-
-			if (mass > 30000)
-			{
-				printf("WAIT!!\n");
-				//current_state = GOTO_WALL_AND_BACK;
-				//motor_ctrl_set_speed(0, 0);
-				//cnt = 0;
-				return;
-			}
-
-			// Get speed... We don't actually use it
-			// motor_ctrl_get_speed(&tacho_left, &tacho_right);
-
-			// Scale error down
-			err = lower->error * k_error;
-			
-			//
-			// Calculate PID
-			//
-			P = err * k_p;
- 
-			I_sum = 0.5 * I_sum + err;
-			I = I_sum * k_i;
-
-			D = (err - last_error) * k_d;
-			last_error = err;
-
-			// Total correction
-			correction = P + I + D;
-
-			// Limit speed if the line has big changes in direction 
-			// in the future
-			err_diff = abs(lower->error - upper->error) * k_error_diff;
-
-			// Calculate new speed
-			speed_l = (int) round(speed_ref - err_diff - mass_limiter - correction);
-			speed_r = (int) round(speed_ref - err_diff - mass_limiter + correction);
-
-			// Send new speeds to motor controller
-			// (Each speed is limited to the interval 0-255 (unsigned 8-bit number))
-			motor_ctrl_set_speed(limit_speed(speed_l), limit_speed(speed_r));
-
-			//
-			// Add log entry
-			//
-
-			log_entry_t * entry = log_entry_create();
-			log_fields_t * f = &entry->fields;
-
-			f->time = 0;
-			f->frame = frame_counter;
-
-			f->error_lower_x = lower->error;
-			f->error_upper_x = upper->error;
-			f->mass = mass;
-
-			f->P = P;
-			f->I = I;
-			f->D = D;
-			f->correction = correction;
-
-			f->speed_left = speed_l;
-			f->speed_right = speed_r;
-
-			f->speed_ref_left = speed_ref;
-			f->speed_ref_right = speed_ref;
-
-			f->tacho_left = (int) tacho_left;
-			f->tacho_right = (int) tacho_right;
-
-			log_add(logs, entry);	
-
 			break;
 		}
 		case GOTO_LINE:
 		{
-			switch (goto_line_state)
-			{
-				// Go straight till we see the line
-				case GO_STRAIGTH:
-				{
-					if (upper->mass > 5000)
-					{
-						motor_ctrl_set_speed(0, 0);
-						goto_line_state = TURN_RIGHT;
-					}
-					else
-					{
-						motor_ctrl_set_speed(30, 30);
-					}
-					break;
-				}
-				// The is perpendicular in front of us.
-				// Turn right till the robot is parallel on top of the line
-				case TURN_RIGHT:
-				{
-					if (lower->mass > 8000)
-					{
-						motor_ctrl_set_speed(0, 0);
-						goto_line_state = READY;
-					}
-					else
-					{
-						motor_ctrl_set_speed(30, 0);
-					}
-					break;
-				}
-				// We are know ready to follow the line
-				case READY:
-				{
-					current_state = FOLLOW_LINE;
-					break;
-				}
-			}
+			int diff;
+			unsigned char enc_l, enc_r;
 
+			motor_ctrl_get_speed(&enc_l, &enc_r);
+			diff = (enc_l - enc_r) * 10;
+
+			slice_t u = { .error = diff };
+			slice_t l = { .error = diff };
+
+			pid_controller(0, &u, &l, speed_ref_slow, 1.0, 2.0, 0, 0);
+
+			//motor_ctrl_set_speed(0, 20);
+			//usleep(1300000);
+			//motor_ctrl_set_speed(0, 0);
+			//current_state = WAITING;
+
+			//diff = enc_l - enc_r;
+			//diff *= 2;
+			//printf("%4d %4d %4d\n", enc_l, enc_r, diff);
+			//diff = 0;
+			//motor_ctrl_set_speed(speed_ref_slow - diff, speed_ref_slow + diff);
+
+			
+			if (mass > mass_horizontal_lower && mass < mass_horizontal_upper)
+			{
+				printf("FOUND IT!\n");
+				//motor_ctrl_set_speed(0, speed_ref_slow);
+				motor_ctrl_set_speed(0, 20);
+				usleep(1300000);
+				motor_ctrl_set_speed(0, 0);
+
+				//cnt = 10;
+				//current_state = GOTO_LINE_TURN_LEFT;
+				current_state = FOLLOW_LINE;
+			}
+			
+			break;
+		}
+		case GOTO_LINE_TURN_LEFT:
+		{
+			cnt--;
+			if (cnt == 0)
+			{
+				current_state = FOLLOW_LINE;
+				//motor_ctrl_set_speed(speed_ref, speed_ref);
+				pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
+			}
+			break;
+		}
+		case FOLLOW_LINE:
+		{
+			/*
+			if (mass > mass_cross_lower && mass < mass_cross_upper)
+			{
+				//cnt = 10;
+				motor_ctrl_brake();
+				//motor_ctrl_set_speed(speed_ref_slow, speed_ref_slow);
+				cnt = 120;
+				current_state = GOTO_WALL_AND_BACK;
+				//current_state = BRAKE_DOWN;;
+			}
+			else
+				*/
+			{
+				pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
+			}
+			break;
+		}
+		case BRAKE_DOWN:
+		{
+			cnt--;
+			if (cnt == 0)
+			{
+				motor_ctrl_brake();
+				motor_ctrl_brake();
+				//motor_ctrl_brake();
+
+				cnt = 120;
+				current_state = GOTO_WALL_AND_BACK;
+			}
 			break;
 		}
 		case GOTO_WALL_AND_BACK:
 		{
-			cnt++;
-			if (cnt > 100)
-			{
-				current_state = FOLLOW_LINE;
-			}
+			// Sequential code for driving to the wall and back
+
+			double distance;
+			double position;
+			double wheelbase = 250; // TODO
+			double pos_per_millimeter = 1.72; // TODO pulses per rev / wheel circumfence
+			double angle = angle_to_line(upper, lower);
+
+			
+			distance = ((90 + angle) * PI * wheelbase)/180;
+			position = distance * pos_per_millimeter; 
+
+			printf("%4.2f %4.2f %4.2f\n", angle, distance, position);
+
+			// Tell motor controller to goto position and wait
+			// for five seconds to ensure that the motor controller
+			// has found the new position.
+			
+			// motor_goto_position(MOTOR_RIGHT, round(position));
+			// sleep(5);
+			// current_state = WAITING;
+
+
+
+			// motor_ctrl_set_speed(0, 20);
+			// usleep(T_90_DEG);
+
+			// motor_ctrl_brake();
+			// motor_ctrl_forward();
+			// usleep(100000);
+
+			// motor_ctrl_set_speed(20, 20);
+
+			// sleep(3);
+
+			// motor_ctrl_brake();
+			// motor_ctrl_forward();
+			// usleep(100000);
+
+			// motor_ctrl_set_speed(20, 0);
+			// usleep(T_180_DEG);
+			// motor_ctrl_set_speed(20, 20);
+
+			// sleep(3);
+
+			// motor_ctrl_brake();
+			// motor_ctrl_forward();
+			// usleep(100000);
+
+			// motor_ctrl_set_speed(0, 20);
+			// usleep(T_90_DEG);
+
+			// motor_ctrl_brake();
+			// motor_ctrl_forward();
+			// usleep(100000);
+			
+			// motor_ctrl_set_speed(0, 0);
+
+			// current_state = WAITING;
+
 			break;
+		}
+		case FOLLOW_LINE_AFTER_WALL:
+		{
+			if (mass > 20000)
+			{
+				//speed_ref = speed_ref_fast;
+				current_state = FOLLOW_LINE_SPEEDY;
+			}
+			pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
+			break;
+		}
+		case FOLLOW_LINE_SPEEDY:
+		{
+			pid_controller(mass, upper, lower, speed_ref_fast, k_error, k_p, k_i, k_d);
 		}
 		default: 
 		{
@@ -472,21 +751,14 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 	}
 }
 
-/*
-static void print_ctrl_constants()
-{
-	printf("K_p = %.2f, K_i = %.2f, K_d = %.2f\n"
-			"K_error = %.2f, K_error_diff = %.2f\n"
-			"speed = %d\n", 
-			K_p, K_i, K_d, K_error, K_error_diff, speed_ref);
-}
-*/
 
 static void load_config()
 {
 	config_reload();
 
 	speed_ref = config_get_int("speed");
+	speed_ref_slow = config_get_int("speed_slow");
+	speed_ref_fast = config_get_int("speed_fast");
 
 	k_p = config_get_float("k_p");
 	k_i = config_get_float("k_i");
@@ -506,6 +778,15 @@ static void load_config()
 	thr_enable = config_get_int("thr_enable");
 	thr_upper = config_get_int("thr_upper");
 	thr_lower = config_get_int("thr_lower");
+
+	mass_horizontal_lower = config_get_int("mass_horizontal_lower");
+	mass_horizontal_upper = config_get_int("mass_horizontal_upper");
+
+	mass_cross_lower = config_get_int("mass_cross_lower");
+	mass_cross_upper = config_get_int("mass_cross_upper");
+
+	mass_bypath_lower = config_get_int("mass_bypath_lower");
+	mass_bypath_upper = config_get_int("mass_bypath_upper");
 }
 
 /**
@@ -561,10 +842,14 @@ static void * shell_thread_fn(void * ptr)
 			 */
 			if (strcmp(buffer, "st") == 0)
 			{	
-				// Start motor at the initial speed
-				I_sum = 0;
-				motor_ctrl_set_speed(speed_l, speed_r);
-
+				reset();
+				motor_ctrl_set_speed(20, 20);
+				current_state = GOTO_LINE;
+			}
+			else if (strcmp(buffer, "st2") == 0)
+			{	
+				reset();
+				//motor_ctrl_set_speed(speed_ref, speed_ref);
 				current_state = FOLLOW_LINE;
 			}
 			/**
@@ -572,7 +857,8 @@ static void * shell_thread_fn(void * ptr)
 			 */
 			else if (strcmp(buffer, "s") == 0)
 			{
-				motor_ctrl_set_speed(0, 0);
+				motor_ctrl_brake();
+				//motor_ctrl_set_speed(0, 0);
 				current_state = WAITING;
 			}
 			
@@ -581,6 +867,17 @@ static void * shell_thread_fn(void * ptr)
 				load_config();
 				printf("Constants reloaded\n");
 			}
+
+			else if (strcmp(buffer, "startcal") == 0)
+			{
+				current_state = CALIBRATE;
+			}
+
+			else if (strcmp(buffer, "stopcal") == 0)
+			{
+				current_state = WAITING;
+			}
+
 			/**
 			 *
 			 */
@@ -589,7 +886,11 @@ static void * shell_thread_fn(void * ptr)
 				cam_end_loop(cam);
 				pthread_exit(0);
 			}
-			
+			else if (strcmp(buffer, "w") == 0)
+			{
+				reset();
+				current_state = GOTO_WALL_AND_BACK;
+			}
 			/**
 			 *
 			 */
@@ -667,6 +968,8 @@ int main(int argc, char ** argv)
 	// Open TCP server socket, and start listening for connections	
 	broadcast_init();
 	broadcast_start();
+
+	reset();
 
 	// Create the main processing thread (camera and update loop)
 	pthread_create(&processing_thread, NULL, processing_thread_fn, NULL);

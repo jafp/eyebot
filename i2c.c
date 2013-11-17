@@ -92,31 +92,39 @@ int i2c_cmd_read(int addr, unsigned char cmd, unsigned char buffer[], int length
 int i2c_cmd_write(int addr, unsigned char cmd, unsigned char buffer[], int length)
 {
     int ret_val;
+    int retries = I2C_MAX_RETRIES;
     struct i2c_rdwr_ioctl_data packets;
-    struct i2c_msg messages[2];
+    struct i2c_msg messages[1];
 
-    unsigned char * buf = malloc(length + 1);
-    buf[0] = cmd;
-
-    memcpy(buf + 1, buffer, length);
-
-    // Prepare command message
-    messages[0].addr = addr;
-    messages[0].flags = 0;
-    messages[0].len = length + 1;
-    messages[0].buf = buf;
-
-    packets.msgs = messages;
-    packets.nmsgs = 1;
-
-    ret_val = ioctl(dev_fd, I2C_RDWR, &packets);
-    if (ret_val < 0)
+    while (retries--)
     {
-        perror("ioctl I2C_RDWR (i2c_cmd_write)");
+        unsigned char * buf = malloc(length + 1);
+        buf[0] = cmd;
+
+        memcpy(buf + 1, buffer, length);
+
+        // Prepare command message
+        messages[0].addr = addr;
+        messages[0].flags = 0;
+        messages[0].len = length + 1;
+        messages[0].buf = buf;
+
+        packets.msgs = messages;
+        packets.nmsgs = 1;
+
+        ret_val = ioctl(dev_fd, I2C_RDWR, &packets);
+        if (ret_val < 0)
+        {
+            perror("ioctl I2C_RDWR (i2c_cmd_write)");
+        }
+
+        free(buf);
+
+        if (ret_val == length)
+        {
+            return length;
+        }
     }
-
-    free(buf);
-
-    return ret_val < 0 ? ret_val : length;
+    return ret_val;
 }
 
