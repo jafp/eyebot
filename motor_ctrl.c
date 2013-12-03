@@ -8,17 +8,18 @@
 
 int motor_ctrl_forward()
 {
-	unsigned char forward = 0x30;
+	unsigned char forward = 0x22;
 	return i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_BRAKE, &forward, 1);
 }
 
 int motor_ctrl_brake()
 {
-	unsigned char brake_all = 0x10;	
+	unsigned char brake_all = 0x00;	
+	// ????
+	i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_BRAKE, &brake_all, 1);
 	return i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_BRAKE, &brake_all, 1);
 }
-		
-
+	
 int motor_ctrl_get_speed(unsigned char * left, unsigned char * right)
 {	
 	unsigned char speeds[2];
@@ -37,11 +38,17 @@ int motor_ctrl_set_speed(unsigned char left, unsigned char right)
 	return i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_SET_SPEED, speeds, 2);
 }
 
-int motor_goto_position(unsigned char motor, unsigned int position)
+int motor_ctrl_set_state(unsigned char state)
 {
-	unsigned char * pos = (unsigned char*) &position;
-	unsigned char data[3] = { motor, pos[0], pos[1] };
-	return i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_GOTO_POS, data, 3);
+	return i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_SET_STATE, &state, 1);
+}
+
+int motor_ctrl_goto_position(unsigned int pos_l, unsigned int pos_r)
+{
+	unsigned char * pl = (unsigned char*) &pos_l;
+	unsigned char * pr = (unsigned char*) &pos_r;
+	unsigned char data[4] = { pl[0], pl[1], pr[0], pr[1] };
+	return i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_GOTO_POS, data, 4);
 }
 
 

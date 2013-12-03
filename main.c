@@ -37,12 +37,13 @@
 
 #define INDEX(y)				( y * WIDTH )
 
-#define T 						0.033
-
+#define T 						0.03333
 #define T_90_DEG				1300000
 #define T_180_DEG				2600000
 
 #define PI 						3.14159265
+
+#define SPEED_LIMIT				100
 
 /**
  * Overall states for the state machine.
@@ -119,7 +120,10 @@ static int speed_ref, speed_ref_slow, speed_ref_fast;
 
 static int speed_l;
 static int speed_r;
+
 static float last_error = 0;
+static float last_error_2 = 0;
+
 static float last_correction = 0;
 static int I_sum = 0;
 static float k_p, k_i, k_d, k_error, k_error_diff;
@@ -470,13 +474,17 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 }
 
 /**
+ * Limits the speed according to the limit specified in the
+ * SPEED_LIMIT constant.
  *
+ * \param speed The speed to limit
+ * \return The limited speed
  */
 static unsigned char limit_speed(int speed)
 {	
-	if (speed > 255)
+	if (speed > SPEED_LIMIT)
 	{
-		return 255;
+		return SPEED_LIMIT;
 	}
 	else if (speed < 0)
 	{
@@ -485,81 +493,104 @@ static unsigned char limit_speed(int speed)
 	return speed;
 }
 
+/**
+ * Function that implements the actual discrete PID controller.
+ *
+ * \param mass
+ * \param upper
+ * \param lower
+ * \param speed
+ * \param Kerr
+ * \param Kp
+ * \param Ki
+ * \param Kd
+ */
 static void pid_controller(int mass, slice_t * upper, slice_t * lower, int speed,
 	float Kerr, float Kp, float Ki, float Kd)
 {
-		float P, I, D;
-		float err;
-		float correction;
-		float err_diff;
-		float mass_pct;
-		int mass_limiter = 0;
-		unsigned char tacho_left = 0, tacho_right = 0;
+	float P, I, D;
+	float err;
+	float correction;
+	float err_diff;
+	float mass_pct;
+	int mass_limiter = 0;
+	unsigned char tacho_left = 0, tacho_right = 0;
 
-		// Scale error down
-		err = lower->error * Kerr;
+	// Scale error down
+	err = lower->error * Kerr;
+
+	//
+	// Calculate PID
+	//
+	P = err * Kp;
+
+	I_sum = (0.5 * I_sum) + err;
+
+	// Avoid integral wind-up
+	if (abs(I_sum) > 10)
+	{
+		I_sum = 0;
+	}
+
+	I = (0.5 * last_correction) + T * Ki * err;
+	////I = I_sum * Ki;
+
+	D = (Kd/T) * (err - last_error);
+	////D = Kd * (err - last_error);
 	
-		//
-		// Calculate PID
-		//
-		P = err * Kp;
+	// Total correction
+	correction = P + I + D;
+	//correction = last_correction + (Kp + Ki*T + Kd/T)*err + (-Kp - 2*Kd/T)*last_error + (Kd/T)*last_error_2;
 
-		I_sum = (0.5 * I_sum) + err;
-		//I = (0.5 * last_correction) + T * k_i * err;
-		I = I_sum * Ki;
+	last_correction = correction;
+
+	//last_error_2 = last_error;
+	last_error = err;
 
 
-		//D = (k_d/T) * (err - last_error);
-		D = Kd * (err - last_error);
-		last_error = err;
+	// Limit speed if the line has big changes in direction 
+	// in the future
+	err_diff = abs(lower->error - upper->error) * k_error_diff;
 
-		// Total correction
-		correction = P + I + D;
-		last_correction = correction;
+	// Calculate new speed
+	speed_l = (int) round(speed - err_diff - correction);
+	speed_r = (int) round(speed - err_diff + correction);
 
-		// Limit speed if the line has big changes in direction 
-		// in the future
-		err_diff = abs(lower->error - upper->error) * k_error_diff;
+	//printf("> %4f %4f %4d %4d\n", correction, err, speed_l, speed_r);
 
-		// Calculate new speed
-		speed_l = (int) round(speed - err_diff - correction);
-		speed_r = (int) round(speed - err_diff + correction);
+	// Send new speeds to motor controller
+	// (Each speed is limited to the interval 0-255 (unsigned 8-bit number))
+	motor_ctrl_set_speed(limit_speed(speed_l), limit_speed(speed_r));
 
-		printf("> %4f %4f %4d %4d\n", correction, err, speed_l, speed_r);
+	//
+	// Add log entry
+	//
 
-		// Send new speeds to motor controller
-		// (Each speed is limited to the interval 0-255 (unsigned 8-bit number))
-		motor_ctrl_set_speed(limit_speed(speed_l), limit_speed(speed_r));
+	log_entry_t * entry = log_entry_create();
+	log_fields_t * f = &entry->fields;
 
-		//
-		// Add log entry
-		//
+	f->time = 0;
+	f->frame = frame_counter;
 
-		log_entry_t * entry = log_entry_create();
-		log_fields_t * f = &entry->fields;
+	f->error_lower_x = lower->error;
+	f->error_upper_x = upper->error;
+	f->mass = mass;
 
-		f->time = 0;
-		f->frame = frame_counter;
+	f->P = P;
+	f->I = I;
+	f->D = D;
+	f->correction = correction;
 
-		f->error_lower_x = lower->error;
-		f->error_upper_x = upper->error;
-		f->mass = mass;
+	f->speed_left = speed_l;
+	f->speed_right = speed_r;
 
-		f->P = P;
-		f->I = I;
-		f->D = D;
-		f->correction = correction;
+	f->speed_ref_left = speed;
+	f->speed_ref_right = speed;
 
-		f->speed_left = speed_l;
-		f->speed_right = speed_r;
+	f->tacho_left = (int) tacho_left;
+	f->tacho_right = (int) tacho_right;
 
-		f->speed_ref_left = speed;
-		f->speed_ref_right = speed;
-
-		f->tacho_left = (int) tacho_left;
-		f->tacho_right = (int) tacho_right;
-
-		log_add(logs, entry);	
+	log_add(logs, entry);	
 
 }
 
@@ -575,53 +606,35 @@ static void pid_controller(int mass, slice_t * upper, slice_t * lower, int speed
  */
 static int update_loop(int mass, slice_t * upper, slice_t * lower)
 {
-	// TODO Seperate variable for the "normal" speed!!
 	switch (current_state)
-	{
+	{	
 		case CALIBRATE:
 		{
 			break;
 		}
+		/*
+		 *
+		 * Go straight till we see the line and then make a left-turn.
+		 *
+		 */
 		case GOTO_LINE:
 		{
-			int diff;
-			unsigned char enc_l, enc_r;
+			// Set speed - motor controller takes care of correcting the 
+			// actual speed of the motors.
+			motor_ctrl_set_speed(speed_ref_slow, speed_ref_slow);
 
-			motor_ctrl_get_speed(&enc_l, &enc_r);
-			diff = (enc_l - enc_r) * 10;
-
-			slice_t u = { .error = diff };
-			slice_t l = { .error = diff };
-
-			pid_controller(0, &u, &l, speed_ref_slow, 1.0, 2.0, 0, 0);
-
-			//motor_ctrl_set_speed(0, 20);
-			//usleep(1300000);
-			//motor_ctrl_set_speed(0, 0);
-			//current_state = WAITING;
-
-			//diff = enc_l - enc_r;
-			//diff *= 2;
-			//printf("%4d %4d %4d\n", enc_l, enc_r, diff);
-			//diff = 0;
-			//motor_ctrl_set_speed(speed_ref_slow - diff, speed_ref_slow + diff);
-
-			
 			if (mass > mass_horizontal_lower && mass < mass_horizontal_upper)
 			{
-				printf("FOUND IT!\n");
-				//motor_ctrl_set_speed(0, speed_ref_slow);
-				motor_ctrl_set_speed(0, 20);
-				usleep(1300000);
-				motor_ctrl_set_speed(0, 0);
-
-				//cnt = 10;
-				//current_state = GOTO_LINE_TURN_LEFT;
-				current_state = FOLLOW_LINE;
+				printf("FOUND IT! (mass: %d)\n", mass);
+				//current_state = FOLLOW_LINE;
+				current_state = WAITING;	
 			}
-			
 			break;
 		}
+		/*
+		 *
+		 *
+		 */
 		case GOTO_LINE_TURN_LEFT:
 		{
 			cnt--;
@@ -633,39 +646,27 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 			}
 			break;
 		}
+		/*
+		 *
+		 * Follow the line
+		 *
+		 */
 		case FOLLOW_LINE:
 		{
-			/*
+			pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
+			// TODO Detect crossing tape - goto wall and back!
 			if (mass > mass_cross_lower && mass < mass_cross_upper)
 			{
-				//cnt = 10;
-				motor_ctrl_brake();
-				//motor_ctrl_set_speed(speed_ref_slow, speed_ref_slow);
-				cnt = 120;
-				current_state = GOTO_WALL_AND_BACK;
-				//current_state = BRAKE_DOWN;;
-			}
-			else
-				*/
-			{
-				pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
-			}
-			break;
-		}
-		case BRAKE_DOWN:
-		{
-			cnt--;
-			if (cnt == 0)
-			{
-				motor_ctrl_brake();
-				motor_ctrl_brake();
-				//motor_ctrl_brake();
 
-				cnt = 120;
-				current_state = GOTO_WALL_AND_BACK;
 			}
+
 			break;
 		}
+		/*
+		 *
+		 *
+		 *
+		 */
 		case GOTO_WALL_AND_BACK:
 		{
 			// Sequential code for driving to the wall and back
@@ -682,64 +683,27 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 
 			printf("%4.2f %4.2f %4.2f\n", angle, distance, position);
 
-			// Tell motor controller to goto position and wait
-			// for five seconds to ensure that the motor controller
-			// has found the new position.
-			
-			// motor_goto_position(MOTOR_RIGHT, round(position));
-			// sleep(5);
-			// current_state = WAITING;
-
-
-
-			// motor_ctrl_set_speed(0, 20);
-			// usleep(T_90_DEG);
-
-			// motor_ctrl_brake();
-			// motor_ctrl_forward();
-			// usleep(100000);
-
-			// motor_ctrl_set_speed(20, 20);
-
-			// sleep(3);
-
-			// motor_ctrl_brake();
-			// motor_ctrl_forward();
-			// usleep(100000);
-
-			// motor_ctrl_set_speed(20, 0);
-			// usleep(T_180_DEG);
-			// motor_ctrl_set_speed(20, 20);
-
-			// sleep(3);
-
-			// motor_ctrl_brake();
-			// motor_ctrl_forward();
-			// usleep(100000);
-
-			// motor_ctrl_set_speed(0, 20);
-			// usleep(T_90_DEG);
-
-			// motor_ctrl_brake();
-			// motor_ctrl_forward();
-			// usleep(100000);
-			
-			// motor_ctrl_set_speed(0, 0);
-
-			// current_state = WAITING;
-
 			break;
 		}
+		/*
+		 *
+		 * Follow line after wall
+		 *
+		 */
 		case FOLLOW_LINE_AFTER_WALL:
 		{
 			if (mass > 20000)
 			{
-				//speed_ref = speed_ref_fast;
 				current_state = FOLLOW_LINE_SPEEDY;
 			}
 			pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
 			break;
 		}
+		/*
+ 		 *
+		 * Follow the line speedy
+		 *
+		 */
 		case FOLLOW_LINE_SPEEDY:
 		{
 			pid_controller(mass, upper, lower, speed_ref_fast, k_error, k_p, k_i, k_d);
@@ -751,7 +715,9 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 	}
 }
 
-
+/**
+ * Load the configuration variables into memory.
+ */
 static void load_config()
 {
 	config_reload();
@@ -843,7 +809,7 @@ static void * shell_thread_fn(void * ptr)
 			if (strcmp(buffer, "st") == 0)
 			{	
 				reset();
-				motor_ctrl_set_speed(20, 20);
+				//motor_ctrl_set_speed(20, 20);
 				current_state = GOTO_LINE;
 			}
 			else if (strcmp(buffer, "st2") == 0)
@@ -861,7 +827,12 @@ static void * shell_thread_fn(void * ptr)
 				//motor_ctrl_set_speed(0, 0);
 				current_state = WAITING;
 			}
-			
+			else if (strcmp(buffer, "run") == 0)
+			{
+				motor_ctrl_forward();
+				current_state = WAITING;
+				motor_ctrl_set_speed(20, 20);
+			}
 			else if (strcmp(buffer, "r") == 0)
 			{
 				load_config();
@@ -877,7 +848,6 @@ static void * shell_thread_fn(void * ptr)
 			{
 				current_state = WAITING;
 			}
-
 			/**
 			 *
 			 */
