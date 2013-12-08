@@ -1,6 +1,8 @@
 *.o
 eyecam
 viewer
+i2c_test
+dist_test
 Makefile
 run-*.csv
 

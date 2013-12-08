@@ -1,23 +1,28 @@
 
-// motor_ctrl.c stub
 
 #include <stdio.h>
-
+#include "motor_ctrl.h"
 #include "common.h"
 #include "i2c.h"
 
+int motor_ctrl_init()
+{
+	motor_ctrl_brake();
+}
+
 int motor_ctrl_forward()
 {
-	unsigned char forward = 0x22;
-	return i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_BRAKE, &forward, 1);
+	return motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
 }
 
 int motor_ctrl_brake()
 {
-	unsigned char brake_all = 0x00;	
-	// ????
-	i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_BRAKE, &brake_all, 1);
-	return i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_BRAKE, &brake_all, 1);
+	return i2c_cmd_write(MOTOR_CTRL_ADDR, 0x70, NULL, 0);
+}
+
+int motor_ctrl_set_dir(unsigned char dir_mask)
+{
+	return i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_BRAKE, &dir_mask, 1);	
 }
 	
 int motor_ctrl_get_speed(unsigned char * left, unsigned char * right)
@@ -51,4 +56,29 @@ int motor_ctrl_goto_position(unsigned int pos_l, unsigned int pos_r)
 	return i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_GOTO_POS, data, 4);
 }
 
+int motor_ctrl_is_position_stable()
+{
+	unsigned char res;
+	i2c_cmd_read(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_IS_STABLE, &res, 1);
+	return res == 0;
+}
 
+int dist_enable(unsigned char mask)
+{
+	return i2c_cmd_write(MOTOR_CTRL_ADDR, 0x90, &mask, 1);
+}
+
+int dist_read(unsigned char * front, unsigned char * side)
+{
+	unsigned char buffer[2] = {0};
+	i2c_cmd_read(MOTOR_CTRL_ADDR, 0x80, buffer, 2);
+	if (front != NULL)
+	{
+		*front = buffer[0];
+	}
+	if (side != NULL)
+	{
+		*side = buffer[1];
+	}
+	return 0;
+}

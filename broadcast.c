@@ -169,7 +169,7 @@ int broadcast_init()
 	pthread_cond_init(&frame_buffer_cv, NULL);
 
 	// Allocate memory for the broadcast packet
-	packet.frame = ALLOC_IMAGE();
+	packet.frame = ((unsigned char *) malloc(IMAGE_PIXELS));
 
 	signal(SIGPIPE, signal_handler);
 }

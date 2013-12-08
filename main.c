@@ -20,30 +20,23 @@
 #include "motor_ctrl.h"
 #include "camera.h"
 #include "log.h"
+#include "avg_num.h"
+#include "ioexp.h"
+#include "image.h"
 
-
-/**
- * Image size
- */
-#define WIDTH 					320
-#define HEIGHT 					240
-#define IMG_SIZE 				(WIDTH * HEIGHT)
-
-/** 
- * Image processing
- */
-#define FLOOR					255
-#define LINE					0
-
-#define INDEX(y)				( y * WIDTH )
+#define delay(ms) 				(usleep(ms * 1000))
 
 #define T 						0.03333
-#define T_90_DEG				1300000
-#define T_180_DEG				2600000
 
-#define PI 						3.14159265
+#define P_45					250
+#define P_90					(2 * P_45)
+#define P_135					(3 * P_45)
+#define P_180					(4 * P_45)
 
 #define SPEED_LIMIT				100
+
+#define ROTATE_LEFT				1
+#define ROTATE_RIGHT			2
 
 /**
  * Overall states for the state machine.
@@ -51,40 +44,18 @@
 typedef enum {
 	CALIBRATE,
 	WAITING,
+	START,
 	GOTO_LINE,
-	GOTO_LINE_TURN_LEFT,
 	FOLLOW_LINE,
-	BRAKE_DOWN,
 	FOLLOW_LINE_SPEEDY,
 	FOLLOW_LINE_AFTER_WALL,
-	GOTO_WALL_AND_BACK,
 	FOLLOW_WALL,
-	TRACK_COMPLETE
+	TRACK_COMPLETE,
+	GOTO_WALL,
+	FROM_WALL_TO_LINE,
+	END_OF_LINE,
+	STICK_TO_WALL
 } state_t;
-
-/**
- * Information about a `slice` of the image, 
- * including mass of the line, error and so on.
- */
-typedef struct slice {
-	int x, y, mass, error;
-} slice_t;
-
-typedef struct img_part {
-	int length;
-	unsigned char * data;
-} img_part_t;
-
-
-int dilation_mask[4][4] = {
-	{ 0, 1, 1, 0 },
-	{ 1, 1, 1, 1 },
-	{ 1, 1, 1, 1 },
-	{ 0, 1, 1, 0 }
-};
-
-int dilation_mask_n = 4;
-
 
 /**
  * List of log entries
@@ -92,12 +63,14 @@ int dilation_mask_n = 4;
 static log_list_t * logs;
 
 /**
- * Camera interface (see cam.h)
+ * Camera interface
  */
 static camera_t * cam;
 
 /**
- * Buffer for temporary image data
+ * Buffer for temporary image data.
+ * This buffer is the primary working buffer when
+ * doing the image processing.
  */ 
 static unsigned char * buffer;
 
@@ -117,21 +90,20 @@ static state_t current_state;
  */
 static int speed_ref, speed_ref_slow, speed_ref_fast;
 
-
-static int speed_l;
-static int speed_r;
+//static int speed_l;
+//static int speed_r;
 
 static float last_error = 0;
-static float last_error_2 = 0;
+//static float last_error_2 = 0;
 
-static float last_correction = 0;
+//static float last_correction = 0;
 static int I_sum = 0;
 static float k_p, k_i, k_d, k_error, k_error_diff;
 static float k_constrast, k_brightness;
 static int slice_upper_start, slice_upper_end, slice_lower_start, slice_lower_end;
-static int thr_enable, thr_lower, thr_upper;
+//static int thr_enable, thr_lower, thr_upper;
 
-static int cnt;
+//static int cnt;
 
 /**
  * Variables containing masses for different types of line intersections
@@ -140,258 +112,74 @@ static int mass_horizontal_lower, mass_horizontal_upper;
 static int mass_cross_lower, mass_cross_upper;
 static int mass_bypath_lower, mass_bypath_upper;
 
-#define MASS_AVG_CNT	2
+static avg_num_t avg_mass;
+static avg_num_t avg_front_dist;
+static avg_num_t avg_side_dist;
 
-static int latest_masses[MASS_AVG_CNT];
-static int latest_mass_idx = 0;
+static int settling_cnt = 0;
+static int settling_en = 0;
+
+#define settling_check() 								\
+	if (settling_en && settling_cnt-- > 0) { return; } 	\
+	else { settling_en = 0; }							\
+
+#define settling_set(frames)							\
+	settling_en = 1; settling_cnt = frames				\
 
 /**
  * Function prototypes
  */
 static int update_loop(int mass, slice_t * upper, slice_t * lower);
 
+/**
+ * Reset all variables used by the controllers.
+ */
 static void reset()
 {
-	int i;
+	avg_num_clear(&avg_mass);
+	avg_num_clear(&avg_front_dist);
+	avg_num_clear(&avg_side_dist);
 
-	latest_mass_idx = 0;
-	for (i = 0; i < MASS_AVG_CNT; i++)
-	{
-		latest_masses[i] = 0;
-	}
-	
+	motor_ctrl_set_state(STATE_SPEED);
+	motor_ctrl_set_speed(0, 0);
 	motor_ctrl_forward();
+
 	I_sum = 0;
 }
 
 /**
- * 
+ * Rotate the robot in the direction given by `dir` and the angle
+ * given by `angle`
  */
-static int add_mass(int mass)
+static void rotate(uint8_t dir, int angle)
 {
-	int i, sum = 0;
-	latest_masses[latest_mass_idx++] = mass;
-	if (latest_mass_idx == MASS_AVG_CNT)
-	{
-		latest_mass_idx = 0;
-	}
-	for (i = 0; i < MASS_AVG_CNT; i++)
-	{
-		sum += latest_masses[i];
-	}
-	return sum / MASS_AVG_CNT;
+	motor_ctrl_set_state(STATE_POSITION);
+	motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
+	motor_ctrl_goto_position(dir == ROTATE_RIGHT ? angle : 0,
+		dir == ROTATE_LEFT ? angle : 0); 
 }
 
 /**
- * Calculate the "center of mass" of the given portion of the image,
- * given as an Y-offset and Y-length.
- */
-static void calculate_center_of_mass(slice_t * pt, int y_offset_start, int y_offset_end)
-{
-	int offset_start, offset_end, sum = 0, x = 0, y = 0, i;
-	pt->x = pt->y = pt->error = 0;
-
-	offset_start = y_offset_start * WIDTH;
-	offset_end = y_offset_end * WIDTH;
-
-	for (i = offset_start; i < offset_end; i++)
-	{
-		if (buffer[i] == LINE)
-		{
-			x += i % WIDTH;
-			y += i / WIDTH;
-			sum++;
-		}
-	}
-
-	if (sum > 0)
-	{
-		pt->x = x / sum;
-		pt->y = y / sum;
-		pt->error = (WIDTH / 2) - pt->x;
-	}
-
-	pt->mass = sum;
-}
-
-/**
- * Calculates histogram.
  *
- * \param hist Pointer to float array where to put the histogram
- * \param start Start row
- * \param end End row
- */
-static void histogram(float * hist, int start, int end)
-{
-	int i;
-	int ihist[256] = {0};
-	
-	start = INDEX(start);
-	end = INDEX(end);
-
-	for (i = start; i < end; i++)
-	{
-		ihist[buffer[i]]++;
-	}
-	for (i = 0; i < 256; i++)
-	{
-		hist[i] = (float)ihist[i] / (float)(end - start);
-	}
-}
-
-/**
- * Optimum Thresholding algorithm from `The Pocket Handbook of Image 
- * Processing Algorithms in C`.
  *
- * \param start Start row (0 - HEIGHT)
- * \param end End row (0 - HEIGHT)
  */
-static void optimum_thresholding(int start, int end, int nice)
+static void straight_forward(uint8_t speed)
 {
-	int y, x, j, flag, thr;
-
-	float sum;
-	float hist[256];
-	
-	
-	histogram(hist, start, end);
-
-	for (y = 0; y < 256; y++)
-	{
-		j = 0;
-		sum = 0;
-		for (x = -15; x <= 15; x++)
-		{
-			j++;
-			if ((y-x) >= 0)
-			{
-				sum = sum + hist[y-x];
-			}
-		}
-		hist[y] = sum / (float) j;
-	}
-
-	y = 50; //50 for normal track
-	thr = 0;
-	flag = 0;
-
-	while (flag == 0 && y < 254)
-	{
-		if (hist[y-1] >= hist[y] && hist[y] < hist[y+1]) 
-		{
-			flag = 1;
-			thr = y;
-		}
-		y++;
-	}
-	
-	start = INDEX(start);
-	end = INDEX(end);
-	thr += nice;
-	//thr = thr_lower;
-	for (j = start; j < end; j++)
-	{
-		buffer[j] = buffer[j] < thr ? LINE : FLOOR;
-	}
-}
-
-static void constrast()
-{
-	int i, tmp;
-	for (i = 0; i < IMG_SIZE; i++)
-	{
-		tmp = buffer[i] * k_constrast;
-		if (tmp > 255)
-		{
-			buffer[i] = 255;
-		}
-		else if (tmp < 0)
-		{
-			buffer[i] = 0;
-		}
-		else
-		{
-			buffer[i] = (unsigned char)tmp;
-		}
-	}
-}
-
-static void dilation(int N, int mask[N][N])
-{
-	int y, x, i, j, smax, off;
-	int n = N/2;
-	for (y = n; y < HEIGHT - n; y++)
-	{
-		for (x = n; x < WIDTH - n; x++)
-		{
-			off = x + y * WIDTH;
-			smax = FLOOR;
-			for (j = -n; j < n; j++)
-			{
-				for (i = -n; i < n; i++)
-				{
-					if (mask[i+n][j+n] == 1)
-					{
-						if (buffer[off] == LINE)
-						{
-							smax = LINE;
-							break;
-						}
-					}
-				}
-				if (smax == LINE)
-				{
-					break;
-				}
-			}
-			buffer[off] = smax;
-		}
-	}
-}
-
-/**
- * Calculate the robot's angle relative to the line.
- *
- * \param upper
- * \param lower
- */
-static double angle_to_line(slice_t * upper, slice_t * lower)
-{
-	int x1, y1, x2, y2;
-
-	// Return zero in case no line at all is found
-	if (upper->x == 0 || upper->y == 0 || lower->x == 0 || lower->y == 0)
-	{
-		return 0;
-	}
-
-	x1 = upper->x - lower->x;
-	y1 = upper->y - lower->y;
-
-	x2 = lower->x;
-	y2 = 0;
-
-	// Calculate and return angle in degrees
-	return ( (x1*x2+y1*y2) / (sqrt(x1*x1+y1*y1) * sqrt(x2*x2+y2*y2)) ) * (180/PI);
-}
-
-
-static void extract_slice(int start, int end, int peak_split, int nice)
-{
-	optimum_thresholding(start, end, nice);
-	//dilation(dilation_mask_n, dilation_mask);
+	motor_ctrl_set_state(STATE_STRAIGHT);
+	motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
+	motor_ctrl_set_speed(speed, speed);
 }
 
 /** 
- * 
+ * Extract the line
  */
 static void extract_line()
 {
-	extract_slice(0, 44, 100, 0);
-	extract_slice(44, 88, 100, 0);
-	extract_slice(88, 144, 100, 0);
-	extract_slice(144, 192, 100, 0);
-	extract_slice(192, 240, 100, 0);
+	extract_slice(buffer, 0, 44, 0);
+	extract_slice(buffer, 44, 88, 0);
+	extract_slice(buffer, 88, 144, 0);
+	extract_slice(buffer, 144, 192, 0);
+	extract_slice(buffer, 192, 240, 0);
 }
 
 
@@ -406,32 +194,16 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 {
 	int i;
 	unsigned char * ptr;
-	unsigned int count = 0;
-	int avg_mass;
+	unsigned int count;
 	slice_t lower, upper;
 
+	count = 0;
 	ptr = (unsigned char *) frame;
 
-	// TODO UPDATE!!
-	//
-	// Image processing part of the code!
-	//
-	// The following steps are done:
-	//  - Every pixel below a curtain gray scale value are "marked" as the line,
-	//    and the rest of the pixels are marked as the floor. The line pixels
-	//	  are colored black, and the rest white.
-	//
-	//  - The X and Y values of each pixel is added together, and the total
-	// 	  number of "line pixels" are counted.
-	//
-	//  - ...
-
-	int tmp;
 	// Copy to working buffer
 	for (i = 0; i < IMG_SIZE; i++)
 	{
-		//tmp = (int)(*ptr) *  k_constrast + k_brightness;
-		buffer[i] = (*ptr);//tmp > 255 ? 255 : tmp;
+		buffer[i] = (*ptr);
 		ptr += 2;
 	}
 
@@ -440,22 +212,18 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 		// Extract line
 		extract_line();
 
-		// 
 		// Calculate center of mass at the upper half of the image.
 		// (this is where the line is farest away)
-		//
-		calculate_center_of_mass(&upper, slice_upper_start, slice_upper_end);
+		calculate_center_of_mass(buffer, &upper, slice_upper_start, slice_upper_end);
 
-		//
 		// Calculate center of mass at the lower half of the image
-		//
-		calculate_center_of_mass(&lower, slice_lower_start, slice_lower_end);
+		calculate_center_of_mass(buffer, &lower, slice_lower_start, slice_lower_end);
 
 		// Aggregated mass of line
 		count = upper.mass + lower.mass;
 	}
 
-	avg_mass = add_mass(count);
+	count = avg_num_add(&avg_mass, count);
 
 	// Transmit every 4rd frame over sockets.
 	// This is 15 frames per second when we are capturing
@@ -464,13 +232,13 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 	{
 		//printf("%d %d -- %d %d\n", lower.x, lower.y, upper.x, upper.y);
 		broadcast_send(lower.x, lower.y, upper.x, upper.y, lower.error, 
-			upper.error, avg_mass, buffer);
+			upper.error, avg_mass.avg, buffer);
 	}
 
 	frame_counter++;
 
 	// Dispatch the updating to another function
-	update_loop(avg_mass, &upper, &lower);
+	update_loop(avg_mass.avg, &upper, &lower);
 }
 
 /**
@@ -512,9 +280,7 @@ static void pid_controller(int mass, slice_t * upper, slice_t * lower, int speed
 	float err;
 	float correction;
 	float err_diff;
-	float mass_pct;
-	int mass_limiter = 0;
-	unsigned char tacho_left = 0, tacho_right = 0;
+	int speed_r, speed_l;
 
 	// Scale error down
 	err = lower->error * Kerr;
@@ -523,30 +289,19 @@ static void pid_controller(int mass, slice_t * upper, slice_t * lower, int speed
 	// Calculate PID
 	//
 	P = err * Kp;
-
 	I_sum = (0.5 * I_sum) + err;
-
 	// Avoid integral wind-up
 	if (abs(I_sum) > 10)
 	{
 		I_sum = 0;
 	}
 
-	I = (0.5 * last_correction) + T * Ki * err;
-	////I = I_sum * Ki;
-
-	D = (Kd/T) * (err - last_error);
-	////D = Kd * (err - last_error);
+	I = I_sum * Ki;
+	D = Kd * (err - last_error);
 	
 	// Total correction
 	correction = P + I + D;
-	//correction = last_correction + (Kp + Ki*T + Kd/T)*err + (-Kp - 2*Kd/T)*last_error + (Kd/T)*last_error_2;
-
-	last_correction = correction;
-
-	//last_error_2 = last_error;
 	last_error = err;
-
 
 	// Limit speed if the line has big changes in direction 
 	// in the future
@@ -555,8 +310,6 @@ static void pid_controller(int mass, slice_t * upper, slice_t * lower, int speed
 	// Calculate new speed
 	speed_l = (int) round(speed - err_diff - correction);
 	speed_r = (int) round(speed - err_diff + correction);
-
-	//printf("> %4f %4f %4d %4d\n", correction, err, speed_l, speed_r);
 
 	// Send new speeds to motor controller
 	// (Each speed is limited to the interval 0-255 (unsigned 8-bit number))
@@ -568,30 +321,58 @@ static void pid_controller(int mass, slice_t * upper, slice_t * lower, int speed
 
 	log_entry_t * entry = log_entry_create();
 	log_fields_t * f = &entry->fields;
-
 	f->time = 0;
 	f->frame = frame_counter;
-
 	f->error_lower_x = lower->error;
 	f->error_upper_x = upper->error;
 	f->mass = mass;
-
 	f->P = P;
 	f->I = I;
 	f->D = D;
 	f->correction = correction;
-
 	f->speed_left = speed_l;
 	f->speed_right = speed_r;
-
 	f->speed_ref_left = speed;
 	f->speed_ref_right = speed;
-
-	f->tacho_left = (int) tacho_left;
-	f->tacho_right = (int) tacho_right;
-
 	log_add(logs, entry);	
+}
 
+/**
+ *
+ *
+ */
+static void goto_wall()
+{
+	uint8_t front;
+
+	dist_enable(DIST_SENSOR_FRONT);
+	avg_num_clear(&avg_front_dist);
+
+	// Go straight till we see the wall
+	motor_ctrl_set_state(STATE_STRAIGHT);
+	motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
+	motor_ctrl_set_speed(speed_ref_slow, speed_ref_slow);
+
+	// Continue while measuring the distance to the wall
+	while (1)
+	{
+		dist_read(&front, NULL);
+		avg_num_add(&avg_front_dist, front);
+
+		if (avg_front_dist.avg > 125)
+		{
+			// Brake and disable the front distance sensor
+			motor_ctrl_brake();
+			beep();
+
+			printf("Found wall. Braking and disabling the distance sensor\n");
+			break;
+		}
+
+		usleep(5000);
+	}
+
+	dist_enable(DIST_SENSOR_NONE);
 }
 
 /**
@@ -612,6 +393,19 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		{
 			break;
 		}
+
+		case START:
+		{
+			beep_start_seq();
+
+			printf("Starting!\n");
+			motor_ctrl_set_state(STATE_STRAIGHT);
+			motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
+			motor_ctrl_set_speed(speed_ref_slow, speed_ref_slow);
+
+			current_state = GOTO_LINE;
+			break;
+		}
 		/*
 		 *
 		 * Go straight till we see the line and then make a left-turn.
@@ -619,33 +413,26 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		 */
 		case GOTO_LINE:
 		{
-			// Set speed - motor controller takes care of correcting the 
-			// actual speed of the motors.
-			motor_ctrl_set_speed(speed_ref_slow, speed_ref_slow);
-
 			if (mass > mass_horizontal_lower && mass < mass_horizontal_upper)
 			{
-				printf("FOUND IT! (mass: %d)\n", mass);
-				//current_state = FOLLOW_LINE;
-				current_state = WAITING;	
-			}
-			break;
-		}
-		/*
-		 *
-		 *
-		 */
-		case GOTO_LINE_TURN_LEFT:
-		{
-			cnt--;
-			if (cnt == 0)
-			{
+				beep();
+				printf("Found the line (%d)\n", mass);
+				
+				motor_ctrl_set_state(STATE_POSITION);
+				motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
+				motor_ctrl_goto_position(0, P_45);
+
+				sleep(1);
+
+				motor_ctrl_set_state(STATE_SPEED);
+
+				beep_state_change();
 				current_state = FOLLOW_LINE;
-				//motor_ctrl_set_speed(speed_ref, speed_ref);
-				pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
+				printf("Following the line\n");
 			}
 			break;
 		}
+
 		/*
 		 *
 		 * Follow the line
@@ -654,35 +441,101 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		case FOLLOW_LINE:
 		{
 			pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
-			// TODO Detect crossing tape - goto wall and back!
 			if (mass > mass_cross_lower && mass < mass_cross_upper)
 			{
+				printf("Found the crossing! (%d)\n", mass);
 
+				// Brake and change state
+				beep_state_change();
+				current_state = GOTO_WALL;
+				motor_ctrl_brake();
+				sleep(2);
 			}
 
 			break;
 		}
-		/*
+
+		/**
+		 *
+		 *
+		 */
+		case GOTO_WALL:
+		{
+			uint8_t dist_front, dist_side;
+			double angle;
+
+			// Clear the averager and enable distance measurements
+			avg_num_clear(&avg_front_dist);
+			dist_enable(DIST_SENSOR_FRONT);
+				
+			// TODO Measure angle to line
+			angle = angle_to_line(upper, lower);
+			printf("Angle to line: %f\n", angle);
+
+			// Turn left
+			motor_ctrl_set_state(STATE_POSITION);
+			motor_ctrl_goto_position(0, P_90);
+			delay(2000);
+
+			goto_wall();
+			delay(1500);
+
+			// Rotate 135 degress
+			motor_ctrl_set_state(STATE_POSITION);
+			motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
+			motor_ctrl_goto_position(P_135, 0);
+
+			sleep(3);
+
+			printf("Rotated 135deg towards the line\n");
+
+			motor_ctrl_set_state(STATE_STRAIGHT);
+			motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
+			motor_ctrl_set_speed(speed_ref_slow, speed_ref_slow);
+			
+			printf("Driving towards the line\n");
+
+			// Wait 60 frames in the next state before taking any action.
+			// This is done for the camera to settle and provide accurate
+			// and stable images.
+			settling_set(60);
+
+			beep();
+			avg_num_clear(&avg_mass);
+			current_state = FROM_WALL_TO_LINE;
+
+			printf("Going into camera mode again (from wall to line state)\n");
+
+			break;
+		}
+
+		/**
 		 *
 		 *
 		 *
 		 */
-		case GOTO_WALL_AND_BACK:
+		case FROM_WALL_TO_LINE:
 		{
-			// Sequential code for driving to the wall and back
+			settling_check();
 
-			double distance;
-			double position;
-			double wheelbase = 250; // TODO
-			double pos_per_millimeter = 1.72; // TODO pulses per rev / wheel circumfence
-			double angle = angle_to_line(upper, lower);
+			printf("mass %d\n", mass);
+			if (mass > 15000 && mass < 33000)
+			{
+				printf("Found the line (%d)\n", mass);
 
-			
-			distance = ((90 + angle) * PI * wheelbase)/180;
-			position = distance * pos_per_millimeter; 
+				// Brake and wait
+				motor_ctrl_brake(); //// <---- TODO!!
+				delay(1000);
 
-			printf("%4.2f %4.2f %4.2f\n", angle, distance, position);
+				// Speed motor state, next state, settling delay
+				motor_ctrl_set_state(STATE_SPEED);
+				current_state = FOLLOW_LINE_AFTER_WALL;
+				settling_set(100);
 
+				// Signal change
+				beep_state_change();
+				printf("State: Follow line after wall\n");
+			}
 			break;
 		}
 		/*
@@ -692,11 +545,19 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		 */
 		case FOLLOW_LINE_AFTER_WALL:
 		{
+			pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
+
+			// Skip rest of state if the settling time hasn't expired
+			settling_check();
+
 			if (mass > 20000)
 			{
+				printf("State: Follow line speedy\n");
+
+				settling_set(30);
 				current_state = FOLLOW_LINE_SPEEDY;
 			}
-			pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
+			
 			break;
 		}
 		/*
@@ -707,7 +568,51 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		case FOLLOW_LINE_SPEEDY:
 		{
 			pid_controller(mass, upper, lower, speed_ref_fast, k_error, k_p, k_i, k_d);
+
+			settling_check();
+			if (mass > 20000)
+			{
+				// Beep, brake, wait
+				beep_state_change();
+				motor_ctrl_brake();
+				sleep(1);
+
+				// Next state
+				beep_state_change();
+				//current_state = END_OF_LINE;
+				current_state = WAITING;
+			}
+			break;
 		}
+
+		case END_OF_LINE:
+		{
+			current_state = STICK_TO_WALL;
+			break;
+		}
+
+		case STICK_TO_WALL:
+		{
+			/*
+			goto_wall();
+			delay(500);
+
+			rotate(ROTATE_RIGHT, P_90);
+			delay(1500);
+
+			stick_to_wall(0);
+			delay(1000);
+
+			rotate(ROTATE_LEFT, P_90);
+			delay(1500);
+
+			stick_to_wall(1);
+			*/
+
+
+			break;
+		}
+
 		default: 
 		{
 
@@ -741,9 +646,9 @@ static void load_config()
 	slice_lower_start = config_get_int("slice_lower_start");
 	slice_lower_end = config_get_int("slice_lower_end");
 
-	thr_enable = config_get_int("thr_enable");
-	thr_upper = config_get_int("thr_upper");
-	thr_lower = config_get_int("thr_lower");
+	//thr_enable = config_get_int("thr_enable");
+	//thr_upper = config_get_int("thr_upper");
+	//thr_lower = config_get_int("thr_lower");
 
 	mass_horizontal_lower = config_get_int("mass_horizontal_lower");
 	mass_horizontal_upper = config_get_int("mass_horizontal_upper");
@@ -778,6 +683,14 @@ static void * processing_thread_fn(void * ptr)
 /**
  *
  */
+static void * led_thread_fn(void * ptr)
+{
+
+}
+
+/**
+ *
+ */
 static void * shell_thread_fn(void * ptr)
 {
 	int i;
@@ -793,7 +706,6 @@ static void * shell_thread_fn(void * ptr)
 			{
 				continue;
 			}
-
 			// Remove newline at the end
 			for (i = 0; i < 255; i++)
 			{
@@ -804,69 +716,81 @@ static void * shell_thread_fn(void * ptr)
 			}
 
 			/**
-			 *
+			 * Command selection
 			 */
+
 			if (strcmp(buffer, "st") == 0)
 			{	
 				reset();
-				//motor_ctrl_set_speed(20, 20);
-				current_state = GOTO_LINE;
+				current_state = START;
 			}
 			else if (strcmp(buffer, "st2") == 0)
 			{	
 				reset();
-				//motor_ctrl_set_speed(speed_ref, speed_ref);
+				motor_ctrl_set_state(STATE_SPEED);
+				motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
+
 				current_state = FOLLOW_LINE;
 			}
+			else if (strcmp(buffer, "st3") == 0)
+			{	
+				reset();
+				motor_ctrl_set_state(STATE_SPEED);
+				motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
+
+				current_state = FOLLOW_LINE_AFTER_WALL;
+			}
 			/**
-			 *
+			 * Stop the robot and return to waiting state.
 			 */
 			else if (strcmp(buffer, "s") == 0)
 			{
 				motor_ctrl_brake();
-				//motor_ctrl_set_speed(0, 0);
 				current_state = WAITING;
 			}
-			else if (strcmp(buffer, "run") == 0)
-			{
-				motor_ctrl_forward();
-				current_state = WAITING;
-				motor_ctrl_set_speed(20, 20);
-			}
+			/**
+			 * Reload the configuration file.
+			 */
 			else if (strcmp(buffer, "r") == 0)
 			{
 				load_config();
 				printf("Constants reloaded\n");
 			}
-
+			/**
+			 * Go to calibration state (no image processing)
+			 */
 			else if (strcmp(buffer, "startcal") == 0)
 			{
 				current_state = CALIBRATE;
 			}
-
+			/**
+			 * Stop calibration mode by returning to waiting state.
+			 */
 			else if (strcmp(buffer, "stopcal") == 0)
 			{
 				current_state = WAITING;
 			}
 			/**
-			 *
+			 * Stop the camera loop and exit the program.
 			 */
 			else if (strcmp(buffer, "exit") == 0)
 			{
 				cam_end_loop(cam);
 				pthread_exit(0);
 			}
-			else if (strcmp(buffer, "w") == 0)
-			{
-				reset();
-				current_state = GOTO_WALL_AND_BACK;
-			}
 			/**
-			 *
+			 * Dump the current image buffer to a file (PGM-format / P2)
 			 */
-			else if (strcmp(buffer, "goto") == 0)
+			else if (strcmp(buffer, "dump") == 0)
 			{
-				current_state = GOTO_LINE;
+				unsigned char buf[IMG_SIZE];
+				char filename[40];
+				time_t timer;
+
+				time(&timer);
+				memcpy(buf, buffer, IMG_SIZE);
+				sprintf(filename, "img-%d.pgm", (int) timer);
+				dump_to_pgm(buf, filename);
 			}
 			else
 			{
@@ -878,13 +802,7 @@ static void * shell_thread_fn(void * ptr)
 
 static void setup_camera()
 {
-	cam = (struct camera *) malloc(sizeof(struct camera));
-	if (cam == NULL)
-	{
-		printf("Could not allocate memory for camera interface, exiting...\n");
-		exit(-1);
-	}
-
+	cam = malloc(sizeof(struct camera));
 	// Camera configuration
 	cam->config.frame_cb = frame_callback;
 	cam->config.width = WIDTH;
@@ -893,19 +811,25 @@ static void setup_camera()
 	cam->dev = config_get_str("device");
 }
 
+static void print_welcome_msg()
+{
+	printf("\n=== Eyebot - The Line Follower ===\n");
+	printf("Config: w: %d, h: %d, fps (expected): %d\n", cam->config.width, 
+		cam->config.height, cam->config.fps);
+}
 
 /**
  * Main entry point.
  */
 int main(int argc, char ** argv)
 {
-	pthread_t processing_thread, shell_thread;
+	pthread_t processing_thread, shell_thread, led_thread;
 	struct addrinfo hints, *res;
 
 	// Initialize variables
 	frame_counter = 0;
 	current_state = WAITING;
-	buffer = (unsigned char *) malloc(IMG_SIZE);
+	buffer = malloc(IMG_SIZE);
 
 	// Init and load the configuration file
 	config_init();
@@ -914,7 +838,12 @@ int main(int argc, char ** argv)
 	// Allocate and initialize the logging system
 	logs = log_create();
 
-	// Setup camera
+	// Allocate average number variables
+	avg_num_create(&avg_mass, 3);
+	avg_num_create(&avg_front_dist, 1);
+	avg_num_create(&avg_side_dist, 1);
+
+	// Setup camera with fps, size etc. from configuration
 	setup_camera();	
 
 	// Open i2c bus (by internally opening the i2c device driver)
@@ -924,9 +853,14 @@ int main(int argc, char ** argv)
 		exit(-1);
 	}
 
+	// Initialize the MCP23016 io-expander
+	ioexp_init();
+
+	// Initialize the motor controller
+	motor_ctrl_init();
+
 	// Print a nice welcome message
-	printf("\n=== Eyecam ===\n");
-	printf("Config: w: %d, h: %d, fps (expected): %d\n", cam->config.width, cam->config.height, cam->config.fps);
+	print_welcome_msg();
 
 	// Catch CTRL-C signal and end looping
 	signal(SIGINT, sigint_handler);
@@ -939,7 +873,15 @@ int main(int argc, char ** argv)
 	broadcast_init();
 	broadcast_start();
 
+	// Reset all counters and stuff
 	reset();
+
+	// Beep once to indicate the robot is ready
+	beep();
+
+	//
+	// Ready! 
+	//
 
 	// Create the main processing thread (camera and update loop)
 	pthread_create(&processing_thread, NULL, processing_thread_fn, NULL);
@@ -951,14 +893,21 @@ int main(int argc, char ** argv)
 	pthread_join(processing_thread, NULL);
 	pthread_join(shell_thread, NULL);	
 	
+	//
+	// Shutting down...
+	//
+
 	cam_stop_capturing(cam);
 	cam_uninit(cam);
 
 	// Stop robot
-	motor_ctrl_set_speed(0, 0);
+	motor_ctrl_brake();
 
 	// Close server socket and drop connections
 	broadcast_release();
+
+	// Close the I2C bus
+	i2c_bus_close();
 
 	//
 	// Dump log information to CSV file

@@ -159,7 +159,7 @@ static void init_mmap(struct camera * ctx)
         } 
         else 
         {
-                errno_exit("VIDIOC_REQBUFS");
+            errno_exit("VIDIOC_REQBUFS");
         }
     }
 
@@ -276,6 +276,8 @@ static void open_device(struct camera * ctx)
     }
 }
 
+
+
 void cam_init(struct camera * ctx)
 {
 	if (!ctx->dev)
@@ -296,8 +298,6 @@ void cam_uninit(struct camera * ctx)
 
 void cam_start_capturing(struct camera * ctx)
 {
-    
-    
 	start_capturing(ctx);
 }
 
