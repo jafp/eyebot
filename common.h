@@ -12,7 +12,7 @@
 
 
 #define INDEX(y)				( y * WIDTH )
-#define INDEX2(x,y)				( y * WIDTH + x )
+#define INDEX2(x,y)				( (y * WIDTH) + x )
 
 
 /**

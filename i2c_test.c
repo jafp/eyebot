@@ -15,9 +15,12 @@ int main(int argc, char ** argv)
 
 	beep_state_change();
 
-	ioexp_led_set(IOEXP_LED0 | IOEXP_LED2 | IOEXP_LED6 | IOEXP_LED7);
-	sleep(2);
+	//ioexp_led_set(IOEXP_LED0 | IOEXP_LED2 | IOEXP_LED6 | IOEXP_LED7);
+	//sleep(2);
 	
+	//ioexp_led_set(0x00);
+	//while (1);
+
 
 	while (1)
 	{

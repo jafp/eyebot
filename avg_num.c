@@ -36,6 +36,10 @@ void avg_num_create(avg_num_t * num, int length)
  */
 int avg_num_add(avg_num_t * num, int n)
 {
+	if (num->used < num->length)
+	{
+		num->used++;
+	}
 	num->values[num->idx++] = n;
 	if (num->idx >= num->length)
 	{
@@ -56,5 +60,5 @@ void avg_num_clear(avg_num_t * num)
 	{
 		num->values[i] = 0;
 	}
-	num->avg = num->idx = 0;
+	num->avg = num->idx = num->used = 0;
 }

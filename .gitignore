@@ -6,6 +6,10 @@ dist_test
 Makefile
 run-*.csv
 
+go
+pos
+pos_test
+
 CMakeCache.txt
 CMakeFiles
 cmake_install.cmake

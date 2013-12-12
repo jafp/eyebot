@@ -7,6 +7,7 @@ typedef struct avg_num {
 	int avg;
 	int idx;
 	int * values;
+	int used;
 } avg_num_t;
 
 void avg_num_create(avg_num_t * num, int length);

@@ -23,12 +23,13 @@
 #include "avg_num.h"
 #include "ioexp.h"
 #include "image.h"
+#include "pid.h"
 
 #define delay(ms) 				(usleep(ms * 1000))
 
 #define T 						0.03333
 
-#define P_45					250
+#define P_45					256
 #define P_90					(2 * P_45)
 #define P_135					(3 * P_45)
 #define P_180					(4 * P_45)
@@ -37,6 +38,14 @@
 
 #define ROTATE_LEFT				1
 #define ROTATE_RIGHT			2
+
+/**
+ * Function prototypes
+ */
+static int update_loop(int mass, slice_t * upper, slice_t * lower);
+static void motor_set_control_value(pid_data_t * pid, float cv);
+static unsigned char get_limited_speed(int speed);
+
 
 /**
  * Overall states for the state machine.
@@ -50,12 +59,46 @@ typedef enum {
 	FOLLOW_LINE_SPEEDY,
 	FOLLOW_LINE_AFTER_WALL,
 	FOLLOW_WALL,
-	TRACK_COMPLETE,
 	GOTO_WALL,
 	FROM_WALL_TO_LINE,
 	END_OF_LINE,
-	STICK_TO_WALL
+	STICK_TO_WALL,
+	STRAIGHT_UNTIL_WALL_DISAPPEARS,
+	STRAIGHT_UNTIL_WALL_DISAPPEARS_2,
+	FOLLOW_WALL_1,
+	FOLLOW_WALL_2,
+	TRACK_COMPLETED
 } state_t;
+
+typedef enum {
+	OFF,
+	BLINK,
+	BLINK_FAST,
+	KNIGHT_NIDER,
+	SHUTDOWN
+} led_state_t;
+
+
+typedef struct {
+	int speed_start;
+	int speed_slow;
+	int speed_normal;
+	int speed_fast;
+	int speed_faster;
+} speeds_t;
+
+typedef struct {
+	int lower;
+	int upper;
+} mass_limits_t;
+
+/**
+ *
+ * ---------------------------------------------------------------------------
+ * Global variables
+ * ---------------------------------------------------------------------------
+ *
+ */
 
 /**
  * List of log entries
@@ -73,6 +116,7 @@ static camera_t * cam;
  * doing the image processing.
  */ 
 static unsigned char * buffer;
+static unsigned char * buffer_copy;
 
 /**
  * Frame counter
@@ -82,35 +126,17 @@ static unsigned long frame_counter;
 /**
  * Current state.
  */
-static state_t current_state;
-
-
-/** 
- * Variables used in the PID controller.
- */
-static int speed_ref, speed_ref_slow, speed_ref_fast;
-
-//static int speed_l;
-//static int speed_r;
-
-static float last_error = 0;
-//static float last_error_2 = 0;
-
-//static float last_correction = 0;
-static int I_sum = 0;
-static float k_p, k_i, k_d, k_error, k_error_diff;
-static float k_constrast, k_brightness;
-static int slice_upper_start, slice_upper_end, slice_lower_start, slice_lower_end;
-//static int thr_enable, thr_lower, thr_upper;
-
-//static int cnt;
+static state_t current_state = WAITING;
 
 /**
- * Variables containing masses for different types of line intersections
+ * Current state of the bumper LEDs
  */
-static int mass_horizontal_lower, mass_horizontal_upper;
-static int mass_cross_lower, mass_cross_upper;
-static int mass_bypath_lower, mass_bypath_upper;
+static led_state_t led_current_state = OFF;
+
+//static int blink_leds = 1;
+
+static float last_error = 0;
+static int I_sum = 0;
 
 static avg_num_t avg_mass;
 static avg_num_t avg_front_dist;
@@ -118,6 +144,35 @@ static avg_num_t avg_side_dist;
 
 static int settling_cnt = 0;
 static int settling_en = 0;
+
+static pthread_mutex_t buffer_mutex;
+
+
+/**
+ * Data for the PID controller used when following the line
+ * using the camera.
+ */
+static pid_data_t line_pid = {
+	.set_cv = motor_set_control_value
+};
+
+// Speed when following the wall
+//static int g_wall_speed;
+//static int g_wall_max_err;
+//static int g_wall_diff_p;
+
+// Controller settings when following the wall
+static pid_data_t wall_pid = {
+	.set_cv = motor_set_control_value
+};
+
+/**
+ *
+ * ---------------------------------------------------------------------------
+ * Functions
+ * ---------------------------------------------------------------------------
+ *
+ */
 
 #define settling_check() 								\
 	if (settling_en && settling_cnt-- > 0) { return; } 	\
@@ -127,9 +182,101 @@ static int settling_en = 0;
 	settling_en = 1; settling_cnt = frames				\
 
 /**
- * Function prototypes
+ * Convert number from distance sensor, to a distance in centimeters.
+ * Approximation calculated using Excel and a bunch of measurements.
+ *
+ * \param dist
  */
-static int update_loop(int mass, slice_t * upper, slice_t * lower);
+static float get_dist_to_cm(unsigned char dist)
+{
+	return 1051.43 * powf(dist, -0.944);
+}
+
+static float get_angle_to_pulses(float angle)
+{
+	return angle * ((float) (512/90));
+}
+
+/**
+ * Calculate side distance process value for PID calculation.
+ *
+ * \param side_front
+ * \param side_rear
+ */
+static float get_side_dist_pv(float side_front, float side_rear)
+{
+	return (conf.w_setpoint - side_front) + 
+		(side_rear - side_front) * conf.w_diff_p;
+}
+
+
+static void motor_set_control_value(pid_data_t * pid, float cv)
+{
+	// Speed (set point) for left and right motor
+	uint8_t speed_left, speed_right;
+	float lcv;
+
+	if (cv > conf.w_max_error) { lcv = conf.w_max_error; }
+	else if (cv < -conf.w_max_error) { lcv = -conf.w_max_error; }
+	else { lcv = cv; }
+
+	speed_left = get_limited_speed(conf.w_speed + lcv);
+	speed_right = get_limited_speed(conf.w_speed - lcv);
+
+	//printf("cv: %4.1f, lcv: %4.1f, l: %4d, r: %4d s: %4d\n", cv, lcv, speed_left, speed_right, g_wall_speed);
+	motor_ctrl_set_speed(speed_left, speed_right);
+}
+
+/**
+ * Read distance from the sensor placed in the front.
+ */
+static float get_dist_front()
+{
+	uint8_t dist;
+	dist_read(&dist, NULL, NULL);
+	return get_dist_to_cm(dist);
+}
+
+/**
+ * Read distance from the side sensor placed in the front.
+ */
+static float get_dist_side_front()
+{
+	uint8_t dist;
+	dist_read(NULL, &dist, NULL);
+	return get_dist_to_cm(dist);
+}
+
+/**
+ * Read distance from the side sensor placed in the rear.
+ */
+static float get_dist_side_rear()
+{
+	uint8_t dist;
+	dist_read(NULL, NULL, &dist);
+	return get_dist_to_cm(dist);	
+}
+
+/**
+ * Limits the speed according to the limit specified in the
+ * SPEED_LIMIT constant.
+ *
+ * \param speed The speed to limit
+ * \return The limited speed
+ */
+static unsigned char get_limited_speed(int speed)
+{	
+	if (speed > SPEED_LIMIT)
+	{
+		return SPEED_LIMIT;
+	}
+	else if (speed < 0)
+	{
+		return 0;
+	}
+	return speed;
+}
+
 
 /**
  * Reset all variables used by the controllers.
@@ -157,17 +304,25 @@ static void rotate(uint8_t dir, int angle)
 	motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
 	motor_ctrl_goto_position(dir == ROTATE_RIGHT ? angle : 0,
 		dir == ROTATE_LEFT ? angle : 0); 
+	motor_ctrl_wait(200);
+}
+
+static void goto_speed_mode()
+{
+	motor_ctrl_set_state(STATE_SPEED);
+	motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
+	motor_ctrl_set_speed(0, 0);
 }
 
 /**
  *
  *
  */
-static void straight_forward(uint8_t speed)
+static void straight_forward()
 {
 	motor_ctrl_set_state(STATE_STRAIGHT);
 	motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
-	motor_ctrl_set_speed(speed, speed);
+	motor_ctrl_set_speed(conf.speed_straight+3, conf.speed_straight);
 }
 
 /** 
@@ -200,6 +355,9 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 	count = 0;
 	ptr = (unsigned char *) frame;
 
+	// Get mutual access to buffer
+	pthread_mutex_lock(&buffer_mutex);
+
 	// Copy to working buffer
 	for (i = 0; i < IMG_SIZE; i++)
 	{
@@ -214,10 +372,12 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 
 		// Calculate center of mass at the upper half of the image.
 		// (this is where the line is farest away)
-		calculate_center_of_mass(buffer, &upper, slice_upper_start, slice_upper_end);
+		calculate_center_of_mass(buffer, &upper, conf.slice_upper_start, 
+			conf.slice_upper_end);
 
 		// Calculate center of mass at the lower half of the image
-		calculate_center_of_mass(buffer, &lower, slice_lower_start, slice_lower_end);
+		calculate_center_of_mass(buffer, &lower, conf.slice_lower_start, 
+			conf.slice_lower_end);
 
 		// Aggregated mass of line
 		count = upper.mass + lower.mass;
@@ -235,31 +395,18 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 			upper.error, avg_mass.avg, buffer);
 	}
 
+	// Create copy for dumping later
+	memcpy(buffer_copy, buffer, IMG_SIZE);
+
+	// Release mutex
+	pthread_mutex_unlock(&buffer_mutex);
+
 	frame_counter++;
 
 	// Dispatch the updating to another function
 	update_loop(avg_mass.avg, &upper, &lower);
 }
 
-/**
- * Limits the speed according to the limit specified in the
- * SPEED_LIMIT constant.
- *
- * \param speed The speed to limit
- * \return The limited speed
- */
-static unsigned char limit_speed(int speed)
-{	
-	if (speed > SPEED_LIMIT)
-	{
-		return SPEED_LIMIT;
-	}
-	else if (speed < 0)
-	{
-		return 0;
-	}
-	return speed;
-}
 
 /**
  * Function that implements the actual discrete PID controller.
@@ -273,8 +420,8 @@ static unsigned char limit_speed(int speed)
  * \param Ki
  * \param Kd
  */
-static void pid_controller(int mass, slice_t * upper, slice_t * lower, int speed,
-	float Kerr, float Kp, float Ki, float Kd)
+static void pid_controller(int mass, slice_t * upper, slice_t * lower, 
+	int speed, float Kerr, float Kp, float Ki, float Kd)
 {
 	float P, I, D;
 	float err;
@@ -305,7 +452,7 @@ static void pid_controller(int mass, slice_t * upper, slice_t * lower, int speed
 
 	// Limit speed if the line has big changes in direction 
 	// in the future
-	err_diff = abs(lower->error - upper->error) * k_error_diff;
+	err_diff = abs(lower->error - upper->error) * conf.k_error_diff;
 
 	// Calculate new speed
 	speed_l = (int) round(speed - err_diff - correction);
@@ -313,7 +460,7 @@ static void pid_controller(int mass, slice_t * upper, slice_t * lower, int speed
 
 	// Send new speeds to motor controller
 	// (Each speed is limited to the interval 0-255 (unsigned 8-bit number))
-	motor_ctrl_set_speed(limit_speed(speed_l), limit_speed(speed_r));
+	motor_ctrl_set_speed(get_limited_speed(speed_l), get_limited_speed(speed_r));
 
 	//
 	// Add log entry
@@ -338,41 +485,44 @@ static void pid_controller(int mass, slice_t * upper, slice_t * lower, int speed
 }
 
 /**
+ * Drives forward until the wall is in the given distance
+ * from the front.
  *
- *
+ * \param limit_lower
+ * \param limit_upper
  */
-static void goto_wall()
+static void goto_wall(int limit_lower, int limit_upper)
 {
 	uint8_t front;
+	float dist_in_cm;
 
-	dist_enable(DIST_SENSOR_FRONT);
+	// Clear averager
 	avg_num_clear(&avg_front_dist);
 
 	// Go straight till we see the wall
-	motor_ctrl_set_state(STATE_STRAIGHT);
-	motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
-	motor_ctrl_set_speed(speed_ref_slow, speed_ref_slow);
+	straight_forward();
 
 	// Continue while measuring the distance to the wall
 	while (1)
 	{
-		dist_read(&front, NULL);
+		// Read, average, and convert to cm
+		dist_read(&front, NULL, NULL);
 		avg_num_add(&avg_front_dist, front);
+		dist_in_cm = get_dist_to_cm(avg_front_dist.avg);
 
-		if (avg_front_dist.avg > 125)
+		if (dist_in_cm > limit_lower && dist_in_cm < limit_upper)
 		{
 			// Brake and disable the front distance sensor
 			motor_ctrl_brake();
+			motor_ctrl_wait(500);
 			beep();
 
-			printf("Found wall. Braking and disabling the distance sensor\n");
+			printf("Found wall (%.2f). Braking and disabling the distance sensor\n", 
+				dist_in_cm);
 			break;
 		}
-
-		usleep(5000);
+		delay(33);
 	}
-
-	dist_enable(DIST_SENSOR_NONE);
 }
 
 /**
@@ -397,12 +547,9 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		case START:
 		{
 			beep_start_seq();
-
 			printf("Starting!\n");
-			motor_ctrl_set_state(STATE_STRAIGHT);
-			motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
-			motor_ctrl_set_speed(speed_ref_slow, speed_ref_slow);
 
+			straight_forward();
 			current_state = GOTO_LINE;
 			break;
 		}
@@ -413,20 +560,19 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		 */
 		case GOTO_LINE:
 		{
-			if (mass > mass_horizontal_lower && mass < mass_horizontal_upper)
+			printf("mass: %d\n", mass);
+			if (mass > conf.mass_horizontal_lower && 
+				mass < conf.mass_horizontal_upper 
+				)
 			{
 				beep();
 				printf("Found the line (%d)\n", mass);
 				
-				motor_ctrl_set_state(STATE_POSITION);
-				motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
-				motor_ctrl_goto_position(0, P_45);
-
-				sleep(1);
-
-				motor_ctrl_set_state(STATE_SPEED);
+				rotate(ROTATE_LEFT, P_45);
+				goto_speed_mode();
 
 				beep_state_change();
+				led_current_state = KNIGHT_NIDER;
 				current_state = FOLLOW_LINE;
 				printf("Following the line\n");
 			}
@@ -440,16 +586,21 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		 */
 		case FOLLOW_LINE:
 		{
-			pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
-			if (mass > mass_cross_lower && mass < mass_cross_upper)
+			pid_controller(mass, upper, lower, conf.speed_slow, conf.k_error, 
+				conf.k_p, conf.k_i, conf.k_d);
+
+			if (mass > conf.mass_cross_lower && mass < conf.mass_cross_upper)
 			{
 				printf("Found the crossing! (%d)\n", mass);
+				beep();
+
+				motor_ctrl_brake();
+				motor_ctrl_wait(1000);
 
 				// Brake and change state
 				beep_state_change();
+				led_current_state = OFF;
 				current_state = GOTO_WALL;
-				motor_ctrl_brake();
-				sleep(2);
 			}
 
 			break;
@@ -466,43 +617,35 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 
 			// Clear the averager and enable distance measurements
 			avg_num_clear(&avg_front_dist);
-			dist_enable(DIST_SENSOR_FRONT);
+			//dist_enable(DIST_SENSOR_FRONT);
 				
 			// TODO Measure angle to line
 			angle = angle_to_line(upper, lower);
 			printf("Angle to line: %f\n", angle);
 
 			// Turn left
-			motor_ctrl_set_state(STATE_POSITION);
-			motor_ctrl_goto_position(0, P_90);
-			delay(2000);
+			rotate(ROTATE_LEFT, P_90);
 
-			goto_wall();
-			delay(1500);
+			// Goto wall
+			goto_wall(18, 22);
 
 			// Rotate 135 degress
-			motor_ctrl_set_state(STATE_POSITION);
-			motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
-			motor_ctrl_goto_position(P_135, 0);
-
-			sleep(3);
-
+			rotate(ROTATE_RIGHT, P_135);
 			printf("Rotated 135deg towards the line\n");
 
-			motor_ctrl_set_state(STATE_STRAIGHT);
-			motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
-			motor_ctrl_set_speed(speed_ref_slow, speed_ref_slow);
-			
+			straight_forward();
 			printf("Driving towards the line\n");
 
 			// Wait 60 frames in the next state before taking any action.
 			// This is done for the camera to settle and provide accurate
 			// and stable images.
-			settling_set(60);
+			settling_set(100);
 
 			beep();
 			avg_num_clear(&avg_mass);
+			led_current_state = BLINK_FAST;
 			current_state = FROM_WALL_TO_LINE;
+			printf("State: From wall to line\n");
 
 			printf("Going into camera mode again (from wall to line state)\n");
 
@@ -518,20 +661,18 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		{
 			settling_check();
 
-			printf("mass %d\n", mass);
-			if (mass > 15000 && mass < 33000)
+			printf("Mass %d\n", mass);
+			if (mass > 10000 && mass < 33000)
 			{
 				printf("Found the line (%d)\n", mass);
 
-				// Brake and wait
-				motor_ctrl_brake(); //// <---- TODO!!
-				delay(1000);
-
 				// Speed motor state, next state, settling delay
-				motor_ctrl_set_state(STATE_SPEED);
-				current_state = FOLLOW_LINE_AFTER_WALL;
+				goto_speed_mode();
 				settling_set(100);
-
+				led_current_state = OFF;
+				//led_current_state = KNIGHT_NIDER;
+				current_state = FOLLOW_LINE_AFTER_WALL;
+				
 				// Signal change
 				beep_state_change();
 				printf("State: Follow line after wall\n");
@@ -545,7 +686,8 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		 */
 		case FOLLOW_LINE_AFTER_WALL:
 		{
-			pid_controller(mass, upper, lower, speed_ref, k_error, k_p, k_i, k_d);
+			pid_controller(mass, upper, lower, conf.speed_normal, conf.k_error
+				, conf.k_p, conf.k_i, conf.k_d);
 
 			// Skip rest of state if the settling time hasn't expired
 			settling_check();
@@ -554,7 +696,9 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 			{
 				printf("State: Follow line speedy\n");
 
+				beep();
 				settling_set(30);
+				led_current_state = OFF;
 				current_state = FOLLOW_LINE_SPEEDY;
 			}
 			
@@ -567,52 +711,213 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		 */
 		case FOLLOW_LINE_SPEEDY:
 		{
-			pid_controller(mass, upper, lower, speed_ref_fast, k_error, k_p, k_i, k_d);
+			pid_controller(mass, upper, lower, conf.speed_fast, conf.k_error, 
+				conf.k_p, conf.k_i, conf.k_d);
 
 			settling_check();
-			if (mass > 20000)
+			if (mass > 23000)
 			{
+				printf("Found end (%d)\n", mass);
+
 				// Beep, brake, wait
 				beep_state_change();
 				motor_ctrl_brake();
-				sleep(1);
+				motor_ctrl_wait(100);
 
 				// Next state
 				beep_state_change();
-				//current_state = END_OF_LINE;
-				current_state = WAITING;
+				current_state = END_OF_LINE;
 			}
 			break;
 		}
 
 		case END_OF_LINE:
 		{
+			// Wait for three seconds as described in the 
+			// requirements specification
+			delay(3000);
 			current_state = STICK_TO_WALL;
 			break;
 		}
 
 		case STICK_TO_WALL:
 		{
-			/*
-			goto_wall();
-			delay(500);
+			// Goto wall and stop between 20 and 24 cm before the wall
+			goto_wall(18, 22);
+			printf("Found wall.\n");
 
+			// Rotate
 			rotate(ROTATE_RIGHT, P_90);
-			delay(1500);
+			//motor_ctrl_wait(200);
+			printf("Turned right.\n");
 
-			stick_to_wall(0);
-			delay(1000);
+			// Go forward
+			straight_forward();
 
-			rotate(ROTATE_LEFT, P_90);
-			delay(1500);
-
-			stick_to_wall(1);
-			*/
-
+			// Next state
+			beep();
+			printf("State: straight until wall disappears");
+			current_state = STRAIGHT_UNTIL_WALL_DISAPPEARS;
 
 			break;
 		}
 
+		case STRAIGHT_UNTIL_WALL_DISAPPEARS:
+		{
+			float dist_side;
+			dist_side = get_dist_side_rear();
+
+			if (dist_side > 14)
+			{
+				motor_ctrl_brake();
+				motor_ctrl_wait(200);
+				printf("Wall disappeared.\n");
+
+				rotate(ROTATE_LEFT, P_90);
+				//motor_ctrl_wait(200);
+				printf("Rotated left.\n");
+
+				straight_forward();
+				// TODO!!!
+				delay(2000); 
+
+				// Next state
+				beep();
+				printf("State: straight until wall disappears 2");
+				current_state = STRAIGHT_UNTIL_WALL_DISAPPEARS_2;
+			}
+
+			break;
+		}
+
+		case STRAIGHT_UNTIL_WALL_DISAPPEARS_2:
+		{
+			float dist;
+			dist = get_dist_side_rear();
+
+			if (dist > 20)
+			{
+				motor_ctrl_brake();
+				motor_ctrl_wait(200);
+				printf("Wall disappeared 2.\n");
+
+				rotate(ROTATE_LEFT, P_90);
+				printf("Rotated left.\n");
+
+				straight_forward();
+				delay(1500);
+
+				pid_reset(&wall_pid);
+				goto_speed_mode();
+
+				beep();
+				printf("State: Follow wall 1\n.");
+				current_state = FOLLOW_WALL_1;
+			}
+
+			break;
+		}
+
+
+		case FOLLOW_WALL_1:
+		{
+			uint8_t dist_1, dist_2, dist_f;
+			float d_f, d_1, d_2, pv;
+
+			dist_read(&dist_f, &dist_1, &dist_2);
+			d_1 = get_dist_to_cm(dist_1);
+			d_2 = get_dist_to_cm(dist_2);
+			d_f = get_dist_to_cm(dist_f);
+
+			if (d_f > 18 && d_f < 24)
+			{
+				motor_ctrl_brake();
+				motor_ctrl_wait(200);
+				
+				rotate(ROTATE_RIGHT, P_90);
+				//motor_ctrl_wait(200);
+
+				goto_speed_mode();
+
+				beep();
+				printf("State: Follow wall 2\n");
+				current_state = FOLLOW_WALL_2;
+			}
+				
+			//d_err = (d2 - d1) + d1;
+			//d_err = 2 * d1 + d2;	
+
+			// error = dist error + direction error
+			//error = (g_wall_pid.set_point - d1) + (d2 - d1) * g_wall_diff_p;
+
+			//printf("d1: %.2f - d2: %.2f - d_err: %.2f  - df: %4.2f\n", d1, d2, error, df);
+			// Do PID control (using set point from config `w_setpoint`)
+			// Could by changed by g_wall_pid.set_point = ...
+
+			pv = get_side_dist_pv(d_1, d_2);
+			pid_ctrl(&wall_pid, (int) pv);
+
+			break;
+		}
+
+		case FOLLOW_WALL_2: 
+		{
+			uint8_t dist_1, dist_2, dist_f;
+			float d_f, d_1, d_2, pv;
+
+			dist_read(&dist_f, &dist_1, &dist_2);
+			d_1 = get_dist_to_cm(dist_1);
+			d_2 = get_dist_to_cm(dist_2);
+			d_f = get_dist_to_cm(dist_f);
+
+			if (d_f > 10 && d_f < 16)
+			{
+				motor_ctrl_brake();
+				motor_ctrl_wait(200);
+				
+				beep();
+				printf("State: Track completed\n");
+				current_state = TRACK_COMPLETED;
+			}
+				
+			//d_err = (d2 - d1) + d1;
+			//d_err = 2 * d1 + d2;	
+
+			// error = dist error + direction error
+			//error = (g_wall_pid.set_point - d1) + (d2 - d1) * g_wall_diff_p;
+
+			//printf("d1: %.2f - d2: %.2f - d_err: %.2f  - df: %4.2f\n", d1, d2, error, df);
+			// Do PID control (using set point from config `w_setpoint`)
+			// Could by changed by g_wall_pid.set_point = ...
+
+			pv = get_side_dist_pv(d_1, d_2);
+			pid_ctrl(&wall_pid, (int) pv);
+
+			break;
+		}
+
+		case TRACK_COMPLETED:
+		{
+			beep_state_change();
+			beep_start_seq();
+
+			// Finale show!!!
+			delay(1000);
+			rotate(ROTATE_RIGHT, P_135);
+			led_current_state = BLINK_FAST;
+
+			int i;
+			for (i = 0; i < 10; i++)
+			{
+				beep_medium();
+				delay(20);
+			}
+
+			led_current_state = OFF;
+			current_state = WAITING;
+
+			break;
+		}
 		default: 
 		{
 
@@ -623,42 +928,22 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 /**
  * Load the configuration variables into memory.
  */
+
 static void load_config()
 {
 	config_reload();
 
-	speed_ref = config_get_int("speed");
-	speed_ref_slow = config_get_int("speed_slow");
-	speed_ref_fast = config_get_int("speed_fast");
+	wall_pid.P = conf.w_k_p;
+	wall_pid.I = conf.w_k_i;
+	wall_pid.D = conf.w_k_d;
+	wall_pid.max_sum_error = conf.w_max_sum_error;
+	wall_pid.set_point = conf.w_setpoint;
 
-	k_p = config_get_float("k_p");
-	k_i = config_get_float("k_i");
-	k_d = config_get_float("k_d");
-	k_error = config_get_float("k_error");
-	k_error_diff = config_get_float("k_error_diff");
-
-	k_constrast = config_get_float("k_constrast");
-	k_brightness = config_get_float("k_brightness");
-
-	slice_upper_start = config_get_int("slice_upper_start");
-	slice_upper_end = config_get_int("slice_upper_end");
-
-	slice_lower_start = config_get_int("slice_lower_start");
-	slice_lower_end = config_get_int("slice_lower_end");
-
-	//thr_enable = config_get_int("thr_enable");
-	//thr_upper = config_get_int("thr_upper");
-	//thr_lower = config_get_int("thr_lower");
-
-	mass_horizontal_lower = config_get_int("mass_horizontal_lower");
-	mass_horizontal_upper = config_get_int("mass_horizontal_upper");
-
-	mass_cross_lower = config_get_int("mass_cross_lower");
-	mass_cross_upper = config_get_int("mass_cross_upper");
-
-	mass_bypath_lower = config_get_int("mass_bypath_lower");
-	mass_bypath_upper = config_get_int("mass_bypath_upper");
+	printf("kp: %.2f, ki: %.2f, kd: %.2f\n", conf.k_p, conf.k_i, conf.k_d);
+	printf("speed_straight: %d, speed_slow: %d\n", conf.speed_straight, conf.speed_slow);
+	printf("mass_horizontal_upper: %d, mass_horizontal_upper: %d\n", conf.mass_horizontal_upper, conf.mass_horizontal_lower);
 }
+
 
 /**
  * SIGINT signal handler.
@@ -668,7 +953,9 @@ static void load_config()
 static void sigint_handler(int signal)
 {
 	//cam_end_loop(cam);
+	motor_ctrl_brake();
 	current_state = WAITING;
+	led_current_state = OFF;
 }
 
 /**
@@ -685,7 +972,55 @@ static void * processing_thread_fn(void * ptr)
  */
 static void * led_thread_fn(void * ptr)
 {
+	uint8_t mask = 0xFF;
+	uint8_t knight_mask = 0x01;
+	uint8_t i;
 
+	while (1)
+	{
+		switch (led_current_state)
+		{
+			case BLINK:
+			case BLINK_FAST:
+			{
+				mask = ~mask;
+				ioexp_led_set(mask);
+				delay(led_current_state == BLINK ? 100 : 50);
+				break;
+			}
+			case KNIGHT_NIDER:
+			{
+				for (i = 0; i < 7; i++)
+				{
+					knight_mask = (1 << i);
+					ioexp_led_set(knight_mask);
+					delay(100);
+				}
+
+				for (i = 5; i > 0; i--)
+				{
+					knight_mask = (1 << i);
+					ioexp_led_set(knight_mask);
+					delay(100);
+				}
+
+				break;
+			}
+			case SHUTDOWN:
+			{
+				// Turn off leds and exit
+				ioexp_led_set(0);
+				pthread_exit(0);
+				break;
+			}
+			case OFF:
+			default: 
+			{
+				ioexp_led_set(0);
+				delay(100);
+			}
+		}
+	}
 }
 
 /**
@@ -721,6 +1056,7 @@ static void * shell_thread_fn(void * ptr)
 
 			if (strcmp(buffer, "st") == 0)
 			{	
+				load_config();
 				reset();
 				current_state = START;
 			}
@@ -740,12 +1076,19 @@ static void * shell_thread_fn(void * ptr)
 
 				current_state = FOLLOW_LINE_AFTER_WALL;
 			}
+			else if (strcmp(buffer, "st4") == 0)
+			{
+				reset();
+				beep_state_change();
+				current_state = STICK_TO_WALL;
+			}
 			/**
 			 * Stop the robot and return to waiting state.
 			 */
 			else if (strcmp(buffer, "s") == 0)
 			{
 				motor_ctrl_brake();
+				//dist_enable(0);
 				current_state = WAITING;
 			}
 			/**
@@ -753,7 +1096,7 @@ static void * shell_thread_fn(void * ptr)
 			 */
 			else if (strcmp(buffer, "r") == 0)
 			{
-				load_config();
+				config_reload();
 				printf("Constants reloaded\n");
 			}
 			/**
@@ -775,6 +1118,7 @@ static void * shell_thread_fn(void * ptr)
 			 */
 			else if (strcmp(buffer, "exit") == 0)
 			{
+				led_current_state = SHUTDOWN;
 				cam_end_loop(cam);
 				pthread_exit(0);
 			}
@@ -783,15 +1127,32 @@ static void * shell_thread_fn(void * ptr)
 			 */
 			else if (strcmp(buffer, "dump") == 0)
 			{
-				unsigned char buf[IMG_SIZE];
 				char filename[40];
-				time_t timer;
+			
+				pthread_mutex_lock(&buffer_mutex);
+				
+				sprintf(filename, "img-%d.pgm", frame_counter);
+				printf("Dumping to %s\n", filename);
+				dump_to_pgm(buffer_copy, filename);
 
-				time(&timer);
-				memcpy(buf, buffer, IMG_SIZE);
-				sprintf(filename, "img-%d.pgm", (int) timer);
-				dump_to_pgm(buf, filename);
+				pthread_mutex_unlock(&buffer_mutex);
 			}
+
+			else if (strcmp(buffer, "wall") == 0)
+			{	
+				// Enable side distance sensor
+				//dist_enable(DIST_SENSOR_SIDE);
+
+				// Reload config and reset variables
+				reset();
+				config_reload();
+				pid_reset(&wall_pid);
+				printf("kp: %f, ki: %f, kd: %f\n", wall_pid.P, wall_pid.I, 
+					wall_pid.D);
+
+				current_state = STICK_TO_WALL;
+			}
+
 			else
 			{
 				printf("Command not found!\n");
@@ -830,6 +1191,9 @@ int main(int argc, char ** argv)
 	frame_counter = 0;
 	current_state = WAITING;
 	buffer = malloc(IMG_SIZE);
+	buffer_copy = malloc(IMG_SIZE);
+
+	pthread_mutex_init(&buffer_mutex, NULL);
 
 	// Init and load the configuration file
 	config_init();
@@ -840,8 +1204,8 @@ int main(int argc, char ** argv)
 
 	// Allocate average number variables
 	avg_num_create(&avg_mass, 3);
-	avg_num_create(&avg_front_dist, 1);
-	avg_num_create(&avg_side_dist, 1);
+	avg_num_create(&avg_front_dist, 10);
+	avg_num_create(&avg_side_dist, 10);
 
 	// Setup camera with fps, size etc. from configuration
 	setup_camera();	
@@ -879,19 +1243,25 @@ int main(int argc, char ** argv)
 	// Beep once to indicate the robot is ready
 	beep();
 
+	led_current_state = KNIGHT_NIDER;
+
 	//
 	// Ready! 
 	//
+
+	pthread_create(&led_thread, NULL, led_thread_fn, NULL);
 
 	// Create the main processing thread (camera and update loop)
 	pthread_create(&processing_thread, NULL, processing_thread_fn, NULL);
 
 	// Create the shell thread
 	pthread_create(&shell_thread, NULL, shell_thread_fn, NULL);
+
 	
 	// Wait for the main thread and shell thread to finish
 	pthread_join(processing_thread, NULL);
 	pthread_join(shell_thread, NULL);	
+	pthread_join(led_thread, NULL);
 	
 	//
 	// Shutting down...

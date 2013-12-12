@@ -7,6 +7,11 @@
 #include <confuse.h>
 
 /**
+ * Definition of the global configuration
+ */
+conf_t conf;
+
+/**
  * The global instance
  */
 static cfg_t * cfg = NULL;
@@ -15,40 +20,53 @@ static cfg_t * cfg = NULL;
  * Definition of all options and their default values
  */
 static cfg_opt_t opts[] = 
-{
+{	
+
 	CFG_STR("device", "/dev/video0", CFGF_NONE),
 	CFG_INT("fps", 30, CFGF_NONE),
 
-	CFG_FLOAT("k_p", 0.0, 0),
-	CFG_FLOAT("k_i", 0.0, 0),
-	CFG_FLOAT("k_d", 0.0, 0),
-	CFG_FLOAT("k_error", 0.0, 0),
-	CFG_FLOAT("k_error_diff", 0.0, 0),
+	CFG_FLOAT("k_p", 0, 0),
+	CFG_FLOAT("k_i", 0, 0),
+	CFG_FLOAT("k_d", 0, 0),
+	CFG_FLOAT("k_error", 0, 0),
+	CFG_FLOAT("k_error_diff", 0, 0),
 
-	CFG_INT("speed", 0, 0),
-	CFG_INT("speed_slow", 0, 0),
-	CFG_INT("speed_fast", 0, 0),
+	CFG_SIMPLE_INT("speed_straight", &conf.speed_straight),
+	CFG_SIMPLE_INT("speed_normal", &conf.speed_normal),
+	CFG_SIMPLE_INT("speed_slow", &conf.speed_slow),
+	CFG_SIMPLE_INT("speed_fast", &conf.speed_fast),
 
-	CFG_INT("slice_upper_start", 0, 0),
-	CFG_INT("slice_upper_end", 0, 0),
-	CFG_INT("slice_lower_start", 0, 0),
-	CFG_INT("slice_lower_end", 0, 0),
+	CFG_SIMPLE_INT("slice_upper_start", &conf.slice_upper_start),
+	CFG_SIMPLE_INT("slice_upper_end", &conf.slice_upper_end),
+	CFG_SIMPLE_INT("slice_lower_start", &conf.slice_lower_start),
+	CFG_SIMPLE_INT("slice_lower_end", &conf.slice_lower_end),
 
-	CFG_FLOAT("k_brightness", 0.0, 0),
-	CFG_FLOAT("k_constrast", 0.0, 0),
+	//CFG_FLOAT("k_brightness", 0.0, 0),
+	//CFG_FLOAT("k_constrast", 0.0, 0),
 
-	CFG_INT("thr_enable", 0, 0),
-	CFG_INT("thr_upper", 0, 0),
-	CFG_INT("thr_lower", 0, 0),
+	//CFG_INT("thr_enable", 0, 0),
+	//CFG_INT("thr_upper", 0, 0),
+	//CFG_INT("thr_lower", 0, 0),
 
-	CFG_INT("mass_horizontal_lower", 0, 0),
-	CFG_INT("mass_horizontal_upper", 0, 0),
-	CFG_INT("mass_cross_lower", 0, 0),
-	CFG_INT("mass_cross_upper", 0, 0),
-	CFG_INT("mass_bypath_lower", 0, 0),
-	CFG_INT("mass_bypath_upper", 0, 0),
-	CFG_INT("mass_end_lower", 0, 0),
-	CFG_INT("mass_end_upper", 0, 0),
+	CFG_SIMPLE_INT("mass_horizontal_lower", &conf.mass_horizontal_lower),
+	CFG_SIMPLE_INT("mass_horizontal_upper", &conf.mass_horizontal_upper),
+	CFG_SIMPLE_INT("mass_cross_lower", &conf.mass_cross_lower),
+	CFG_SIMPLE_INT("mass_cross_upper", &conf.mass_cross_upper),
+	CFG_SIMPLE_INT("mass_bypath_lower", &conf.mass_bypath_lower),
+	CFG_SIMPLE_INT("mass_bypath_upper", &conf.mass_bypath_upper),
+	CFG_SIMPLE_INT("mass_end_lower", &conf.mass_end_lower),
+	CFG_SIMPLE_INT("mass_end_upper", &conf.mass_end_upper),
+
+	CFG_FLOAT("w_k_p", 0, 0),
+	CFG_FLOAT("w_k_i", 0, 0),
+	CFG_FLOAT("w_k_d", 0, 0),
+	CFG_FLOAT("w_diff_p", 0, 0),
+
+	CFG_SIMPLE_INT("w_max_sum_error", &conf.w_max_sum_error),
+	CFG_SIMPLE_INT("w_max_error", &conf.w_max_error),
+	CFG_SIMPLE_INT("w_setpoint", &conf.w_setpoint),
+	CFG_SIMPLE_INT("w_speed", &conf.w_speed),
+	
 
 	CFG_END()
 };
@@ -70,6 +88,18 @@ int config_reload()
 	{
 		return -1;
 	}
+
+	conf.k_p = cfg_getfloat(cfg, "k_p");
+	conf.k_i = cfg_getfloat(cfg, "k_i");
+	conf.k_d = cfg_getfloat(cfg, "k_d");
+	conf.k_error = cfg_getfloat(cfg, "k_error");
+	conf.k_error_diff = cfg_getfloat(cfg, "k_error_diff");
+
+	conf.w_k_p = cfg_getfloat(cfg, "w_k_p");
+	conf.w_k_i = cfg_getfloat(cfg, "w_k_i");
+	conf.w_k_d = cfg_getfloat(cfg, "w_k_d");
+	conf.w_diff_p = cfg_getfloat(cfg, "w_diff_p");
+
 	return 0;
 }
 

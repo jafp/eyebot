@@ -40,9 +40,10 @@ int motor_ctrl_get_speed(unsigned char * left, unsigned char * right);
 int motor_ctrl_set_speed(unsigned char left, unsigned char right);
 int motor_ctrl_set_state(unsigned char state);
 int motor_ctrl_goto_position(unsigned int pos_l, unsigned int pos_r);
-int motor_ctrl_is_position_stable();
+int motor_ctrl_wait(int additional_delay_ms);
 
-int dist_read(unsigned char * front, unsigned char * side);
+int dist_read(unsigned char * front, unsigned char * side, 
+	unsigned char * side2);
 int dist_enable(unsigned char mask);
 
 #endif

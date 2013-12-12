@@ -56,11 +56,35 @@ int motor_ctrl_goto_position(unsigned int pos_l, unsigned int pos_r)
 	return i2c_cmd_write(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_GOTO_POS, data, 4);
 }
 
-int motor_ctrl_is_position_stable()
+int motor_ctrl_wait(int additional_delay_ms)
 {
+	int counter = 0;
+	int delay_ms = 150;
+	int max_settling_time_ms = 3000; 
+	int max_rounds = max_settling_time_ms / delay_ms; 
 	unsigned char res;
-	i2c_cmd_read(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_IS_STABLE, &res, 1);
-	return res == 0;
+	
+	while (1)
+	{
+		i2c_cmd_read(MOTOR_CTRL_ADDR, MOTOR_CTRL_CMD_IS_STABLE, &res, 1);
+		
+		if (res == 1)
+		{
+			break;
+		}
+		if (counter > max_rounds)
+		{
+			printf("Position timeout...\n");
+			break;
+		}
+
+		// Delay 5 ms
+		usleep(delay_ms * 1000);
+		counter++;
+	}
+
+	usleep(additional_delay_ms * 1000);
+	return 0;
 }
 
 int dist_enable(unsigned char mask)
@@ -68,10 +92,10 @@ int dist_enable(unsigned char mask)
 	return i2c_cmd_write(MOTOR_CTRL_ADDR, 0x90, &mask, 1);
 }
 
-int dist_read(unsigned char * front, unsigned char * side)
+int dist_read(unsigned char * front, unsigned char * side, unsigned char * side2)
 {
-	unsigned char buffer[2] = {0};
-	i2c_cmd_read(MOTOR_CTRL_ADDR, 0x80, buffer, 2);
+	unsigned char buffer[3] = {0};
+	i2c_cmd_read(MOTOR_CTRL_ADDR, 0x80, buffer, 3);
 	if (front != NULL)
 	{
 		*front = buffer[0];
@@ -79,6 +103,10 @@ int dist_read(unsigned char * front, unsigned char * side)
 	if (side != NULL)
 	{
 		*side = buffer[1];
+	}
+	if (side2 != NULL)
+	{
+		*side2 = buffer[2];
 	}
 	return 0;
 }

@@ -198,16 +198,12 @@ void dump_to_pgm(unsigned char * buffer, const char * file)
 	fputs("P2\n", fp);
 	fprintf(fp, "%d %d\n%d\n", WIDTH, HEIGHT, 255);
 
-	for (y = 0; y < HEIGHT; y++)
+	for (x = 0; x < IMG_SIZE; x++)
 	{
-		for (x = 0; x < WIDTH; x++)
-		{
-			i = INDEX2(x, y);
-			c = buffer[i];
-
-			fprintf(fp, "%d ", (int) c);
-		}
-		fprintf(fp, "\n");
+		c = buffer[x];
+		fprintf(fp, "%d ", (int) c);
 	}
+
+	fclose(fp);
 }
 
