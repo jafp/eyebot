@@ -41,13 +41,6 @@ static cfg_opt_t opts[] =
 	CFG_SIMPLE_INT("slice_lower_start", &conf.slice_lower_start),
 	CFG_SIMPLE_INT("slice_lower_end", &conf.slice_lower_end),
 
-	//CFG_FLOAT("k_brightness", 0.0, 0),
-	//CFG_FLOAT("k_constrast", 0.0, 0),
-
-	//CFG_INT("thr_enable", 0, 0),
-	//CFG_INT("thr_upper", 0, 0),
-	//CFG_INT("thr_lower", 0, 0),
-
 	CFG_SIMPLE_INT("mass_horizontal_lower", &conf.mass_horizontal_lower),
 	CFG_SIMPLE_INT("mass_horizontal_upper", &conf.mass_horizontal_upper),
 	CFG_SIMPLE_INT("mass_cross_lower", &conf.mass_cross_lower),

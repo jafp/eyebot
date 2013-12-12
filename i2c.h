@@ -2,7 +2,7 @@
 #ifndef _I2C_H_
 #define _I2C_H_
 
-#define I2C_BUS 			"/dev/i2c-1"
+#define I2C_BUS 			"/dev/i2c-0"
 #define I2C_MAX_RETRIES		10
 
 int i2c_bus_open();

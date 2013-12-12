@@ -1,6 +1,8 @@
 
 
+#include <math.h>
 #include <stdio.h>
+
 #include "motor_ctrl.h"
 #include "common.h"
 #include "i2c.h"
@@ -109,4 +111,32 @@ int dist_read(unsigned char * front, unsigned char * side, unsigned char * side2
 		*side2 = buffer[2];
 	}
 	return 0;
+}
+
+dist_readings_t dist_read_all()
+{
+	dist_readings_t readings;
+		
+	// Read raw values from sensors
+	dist_read(&readings.front_val, &readings.side_1_val, 
+		&readings.side_2_val);
+
+	// Convert the numbers to a distance in centimeters
+	readings.front = get_dist_to_cm(readings.front_val);
+	readings.side_1 = get_dist_to_cm(readings.side_1_val);
+	readings.side_2 = get_dist_to_cm(readings.side_2_val);
+
+	return readings;
+}
+
+
+/**
+ * Convert number from distance sensor, to a distance in centimeters.
+ * Approximation calculated using Excel and a bunch of measurements.
+ *
+ * \param dist
+ */
+float get_dist_to_cm(unsigned char dist)
+{
+	return 1051.43 * powf(dist, -0.944);
 }

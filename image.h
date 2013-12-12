@@ -22,7 +22,5 @@ double angle_to_line(slice_t * upper, slice_t * lower);
 
 void extract_slice(unsigned char * buffer, int start, int end, int nice);
 
-void dump_to_pgm(unsigned char * buffer, const char * file);
-
 #endif
 

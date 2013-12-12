@@ -2,6 +2,8 @@
 #ifndef _MOTOR_CTRL_H_
 #define _MOTOR_CTRL_H_
 
+#include <stdint.h>
+
 #define MOTOR_CTRL_ADDR				0x23
 
 #define MOTOR_LEFT 					0x10
@@ -32,6 +34,11 @@
 #define DIST_SENSOR_FRONT			0x01
 #define DIST_SENSOR_SIDE			0x02
 
+typedef struct {
+	uint8_t front_val, side_1_val, side_2_val;
+	float front, side_1, side_2;
+} dist_readings_t;
+
 int motor_ctrl_init();
 int motor_ctrl_brake();
 int motor_ctrl_forward();
@@ -42,6 +49,8 @@ int motor_ctrl_set_state(unsigned char state);
 int motor_ctrl_goto_position(unsigned int pos_l, unsigned int pos_r);
 int motor_ctrl_wait(int additional_delay_ms);
 
+float get_dist_to_cm(unsigned char dist);
+dist_readings_t dist_read_all();
 int dist_read(unsigned char * front, unsigned char * side, 
 	unsigned char * side2);
 int dist_enable(unsigned char mask);

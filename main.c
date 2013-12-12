@@ -27,17 +27,21 @@
 
 #define delay(ms) 				(usleep(ms * 1000))
 
-#define T 						0.03333
-
 #define P_45					256
 #define P_90					(2 * P_45)
 #define P_135					(3 * P_45)
 #define P_180					(4 * P_45)
 
+#define AVG_MASS_CNT			3
+#define AVG_DIST_CNT			10
+
 #define SPEED_LIMIT				100
 
 #define ROTATE_LEFT				1
 #define ROTATE_RIGHT			2
+
+#define BLINK_DELAY				100
+#define BLINK_FAST_DELAY		50
 
 /**
  * Function prototypes
@@ -78,20 +82,6 @@ typedef enum {
 	SHUTDOWN
 } led_state_t;
 
-
-typedef struct {
-	int speed_start;
-	int speed_slow;
-	int speed_normal;
-	int speed_fast;
-	int speed_faster;
-} speeds_t;
-
-typedef struct {
-	int lower;
-	int upper;
-} mass_limits_t;
-
 /**
  *
  * ---------------------------------------------------------------------------
@@ -116,7 +106,17 @@ static camera_t * cam;
  * doing the image processing.
  */ 
 static unsigned char * buffer;
+
+/**
+ * Copy of the buffer used when dumping the current
+ * image.
+ */
 static unsigned char * buffer_copy;
+
+/**
+ *
+ */
+static slice_t latest_upper_error, latest_lower_error;
 
 /**
  * Frame counter
@@ -156,12 +156,9 @@ static pid_data_t line_pid = {
 	.set_cv = motor_set_control_value
 };
 
-// Speed when following the wall
-//static int g_wall_speed;
-//static int g_wall_max_err;
-//static int g_wall_diff_p;
-
-// Controller settings when following the wall
+/**
+ * Controller settings when following the wall
+ */
 static pid_data_t wall_pid = {
 	.set_cv = motor_set_control_value
 };
@@ -181,15 +178,30 @@ static pid_data_t wall_pid = {
 #define settling_set(frames)							\
 	settling_en = 1; settling_cnt = frames				\
 
+
+
 /**
- * Convert number from distance sensor, to a distance in centimeters.
- * Approximation calculated using Excel and a bunch of measurements.
- *
- * \param dist
+ * Dump the given image buffer as an PGM file.
  */
-static float get_dist_to_cm(unsigned char dist)
+void dump_to_pgm(unsigned char * buffer, int x1, int y1, int x2, int y2, 
+	int mass, const char * file)
 {
-	return 1051.43 * powf(dist, -0.944);
+	unsigned char c;
+	int x, y, i;
+	FILE * fp;
+
+	fp = fopen(file, "w");
+	fputs("P2\n", fp);
+	fprintf(fp, "# upper: (%d,%d), lower: (%d,%d), mass: %d\n", x1, y1, x1, y2, mass);
+	fprintf(fp, "%d %d\n%d\n", WIDTH, HEIGHT, 255);
+
+	for (x = 0; x < IMG_SIZE; x++)
+	{
+		c = buffer[x];
+		fprintf(fp, "%d ", (int) c);
+	}
+
+	fclose(fp);
 }
 
 static float get_angle_to_pulses(float angle)
@@ -277,21 +289,14 @@ static unsigned char get_limited_speed(int speed)
 	return speed;
 }
 
-
 /**
- * Reset all variables used by the controllers.
+ * Go into speed mode (speed = 0)
  */
-static void reset()
+static void goto_speed_mode()
 {
-	avg_num_clear(&avg_mass);
-	avg_num_clear(&avg_front_dist);
-	avg_num_clear(&avg_side_dist);
-
 	motor_ctrl_set_state(STATE_SPEED);
+	motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
 	motor_ctrl_set_speed(0, 0);
-	motor_ctrl_forward();
-
-	I_sum = 0;
 }
 
 /**
@@ -307,13 +312,6 @@ static void rotate(uint8_t dir, int angle)
 	motor_ctrl_wait(200);
 }
 
-static void goto_speed_mode()
-{
-	motor_ctrl_set_state(STATE_SPEED);
-	motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
-	motor_ctrl_set_speed(0, 0);
-}
-
 /**
  *
  *
@@ -323,6 +321,18 @@ static void straight_forward()
 	motor_ctrl_set_state(STATE_STRAIGHT);
 	motor_ctrl_set_dir(DIR_LEFT_FORWARD | DIR_RIGHT_FORWARD);
 	motor_ctrl_set_speed(conf.speed_straight+3, conf.speed_straight);
+}
+
+/**
+ * Reset all variables used by the controllers.
+ */
+static void reset()
+{
+	avg_num_clear(&avg_mass);
+	avg_num_clear(&avg_front_dist);
+	avg_num_clear(&avg_side_dist);
+	goto_speed_mode();
+	I_sum = 0;
 }
 
 /** 
@@ -395,8 +405,11 @@ static void frame_callback(struct camera * cam, void * frame, int length)
 			upper.error, avg_mass.avg, buffer);
 	}
 
+
 	// Create copy for dumping later
 	memcpy(buffer_copy, buffer, IMG_SIZE);
+	latest_upper_error = upper;
+	latest_lower_error = lower;
 
 	// Release mutex
 	pthread_mutex_unlock(&buffer_mutex);
@@ -562,8 +575,7 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		{
 			printf("mass: %d\n", mass);
 			if (mass > conf.mass_horizontal_lower && 
-				mass < conf.mass_horizontal_upper 
-				)
+				mass < conf.mass_horizontal_upper)
 			{
 				beep();
 				printf("Found the line (%d)\n", mass);
@@ -844,16 +856,6 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 				current_state = FOLLOW_WALL_2;
 			}
 				
-			//d_err = (d2 - d1) + d1;
-			//d_err = 2 * d1 + d2;	
-
-			// error = dist error + direction error
-			//error = (g_wall_pid.set_point - d1) + (d2 - d1) * g_wall_diff_p;
-
-			//printf("d1: %.2f - d2: %.2f - d_err: %.2f  - df: %4.2f\n", d1, d2, error, df);
-			// Do PID control (using set point from config `w_setpoint`)
-			// Could by changed by g_wall_pid.set_point = ...
-
 			pv = get_side_dist_pv(d_1, d_2);
 			pid_ctrl(&wall_pid, (int) pv);
 
@@ -862,15 +864,10 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 
 		case FOLLOW_WALL_2: 
 		{
-			uint8_t dist_1, dist_2, dist_f;
-			float d_f, d_1, d_2, pv;
+			float pv;
+			dist_readings_t dists = dist_read_all();
 
-			dist_read(&dist_f, &dist_1, &dist_2);
-			d_1 = get_dist_to_cm(dist_1);
-			d_2 = get_dist_to_cm(dist_2);
-			d_f = get_dist_to_cm(dist_f);
-
-			if (d_f > 10 && d_f < 16)
+			if (dists.front > 14 && dists.front < 18)
 			{
 				motor_ctrl_brake();
 				motor_ctrl_wait(200);
@@ -879,18 +876,8 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 				printf("State: Track completed\n");
 				current_state = TRACK_COMPLETED;
 			}
-				
-			//d_err = (d2 - d1) + d1;
-			//d_err = 2 * d1 + d2;	
 
-			// error = dist error + direction error
-			//error = (g_wall_pid.set_point - d1) + (d2 - d1) * g_wall_diff_p;
-
-			//printf("d1: %.2f - d2: %.2f - d_err: %.2f  - df: %4.2f\n", d1, d2, error, df);
-			// Do PID control (using set point from config `w_setpoint`)
-			// Could by changed by g_wall_pid.set_point = ...
-
-			pv = get_side_dist_pv(d_1, d_2);
+			pv = get_side_dist_pv(dists.side_1, dists.side_2);
 			pid_ctrl(&wall_pid, (int) pv);
 
 			break;
@@ -899,10 +886,9 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		case TRACK_COMPLETED:
 		{
 			beep_state_change();
-			beep_start_seq();
-
+			
 			// Finale show!!!
-			delay(1000);
+			delay(500);
 			rotate(ROTATE_RIGHT, P_135);
 			led_current_state = BLINK_FAST;
 
@@ -939,9 +925,9 @@ static void load_config()
 	wall_pid.max_sum_error = conf.w_max_sum_error;
 	wall_pid.set_point = conf.w_setpoint;
 
-	printf("kp: %.2f, ki: %.2f, kd: %.2f\n", conf.k_p, conf.k_i, conf.k_d);
-	printf("speed_straight: %d, speed_slow: %d\n", conf.speed_straight, conf.speed_slow);
-	printf("mass_horizontal_upper: %d, mass_horizontal_upper: %d\n", conf.mass_horizontal_upper, conf.mass_horizontal_lower);
+	//printf("kp: %.2f, ki: %.2f, kd: %.2f\n", conf.k_p, conf.k_i, conf.k_d);
+	//printf("speed_straight: %d, speed_slow: %d\n", conf.speed_straight, conf.speed_slow);
+	//printf("mass_horizontal_upper: %d, mass_horizontal_upper: %d\n", conf.mass_horizontal_upper, conf.mass_horizontal_lower);
 }
 
 
@@ -952,7 +938,6 @@ static void load_config()
  */
 static void sigint_handler(int signal)
 {
-	//cam_end_loop(cam);
 	motor_ctrl_brake();
 	current_state = WAITING;
 	led_current_state = OFF;
@@ -985,7 +970,7 @@ static void * led_thread_fn(void * ptr)
 			{
 				mask = ~mask;
 				ioexp_led_set(mask);
-				delay(led_current_state == BLINK ? 100 : 50);
+				delay(led_current_state == BLINK ? BLINK_DELAY : BLINK_FAST_DELAY);
 				break;
 			}
 			case KNIGHT_NIDER:
@@ -1133,7 +1118,9 @@ static void * shell_thread_fn(void * ptr)
 				
 				sprintf(filename, "img-%d.pgm", frame_counter);
 				printf("Dumping to %s\n", filename);
-				dump_to_pgm(buffer_copy, filename);
+				dump_to_pgm(buffer_copy, latest_upper_error.x, latest_upper_error.y, 
+					latest_lower_error.x, latest_upper_error.y, latest_upper_error.mass + latest_lower_error.mass, filename);
+				printf("%d, %d - %d, %d\n", latest_upper_error.x, latest_upper_error.y, latest_lower_error.x, latest_lower_error.y);
 
 				pthread_mutex_unlock(&buffer_mutex);
 			}
@@ -1203,9 +1190,9 @@ int main(int argc, char ** argv)
 	logs = log_create();
 
 	// Allocate average number variables
-	avg_num_create(&avg_mass, 3);
-	avg_num_create(&avg_front_dist, 10);
-	avg_num_create(&avg_side_dist, 10);
+	avg_num_create(&avg_mass, AVG_MASS_CNT);
+	avg_num_create(&avg_front_dist, AVG_MASS_CNT);
+	avg_num_create(&avg_side_dist, AVG_MASS_CNT);
 
 	// Setup camera with fps, size etc. from configuration
 	setup_camera();	
@@ -1243,13 +1230,11 @@ int main(int argc, char ** argv)
 	// Beep once to indicate the robot is ready
 	beep();
 
-	led_current_state = KNIGHT_NIDER;
-
 	//
 	// Ready! 
 	//
 
-	pthread_create(&led_thread, NULL, led_thread_fn, NULL);
+	//pthread_create(&led_thread, NULL, led_thread_fn, NULL);
 
 	// Create the main processing thread (camera and update loop)
 	pthread_create(&processing_thread, NULL, processing_thread_fn, NULL);
@@ -1261,7 +1246,7 @@ int main(int argc, char ** argv)
 	// Wait for the main thread and shell thread to finish
 	pthread_join(processing_thread, NULL);
 	pthread_join(shell_thread, NULL);	
-	pthread_join(led_thread, NULL);
+	//pthread_join(led_thread, NULL);
 	
 	//
 	// Shutting down...
@@ -1288,12 +1273,11 @@ int main(int argc, char ** argv)
 
 	time(&now);
 	timeinfo = localtime(&now);
-	sprintf(filename, "run-%d-%d-%d-%d-%d-%d.csv", timeinfo->tm_mday, 
+	sprintf(filename, "../../run-%d-%d-%d-%d-%d-%d.csv", timeinfo->tm_mday, 
 		timeinfo->tm_mon + 1, timeinfo->tm_year + 1900, timeinfo->tm_hour, 
 		timeinfo->tm_min, timeinfo->tm_sec);
-
-	//printf("Logging run data to %s\n", filename);
-	//log_dump(logs, filename);
+	printf("Logging run data to %s\n", filename);
+	log_dump(logs, filename);
 
 	// Print some statistics.
 	// TODO: Calculate and show some statistics while running?

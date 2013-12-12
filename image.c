@@ -185,25 +185,4 @@ void extract_slice(unsigned char * buffer, int start, int end, int nice)
 	optimum_thresholding(buffer, start, end, nice);
 }
 
-/**
- * Dump the given image buffer as an PGM file.
- */
-void dump_to_pgm(unsigned char * buffer, const char * file)
-{
-	unsigned char c;
-	int x, y, i;
-	FILE * fp;
-
-	fp = fopen(file, "w");
-	fputs("P2\n", fp);
-	fprintf(fp, "%d %d\n%d\n", WIDTH, HEIGHT, 255);
-
-	for (x = 0; x < IMG_SIZE; x++)
-	{
-		c = buffer[x];
-		fprintf(fp, "%d ", (int) c);
-	}
-
-	fclose(fp);
-}
 
