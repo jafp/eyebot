@@ -192,7 +192,8 @@ void dump_to_pgm(unsigned char * buffer, int x1, int y1, int x2, int y2,
 
 	fp = fopen(file, "w");
 	fputs("P2\n", fp);
-	fprintf(fp, "# upper: (%d,%d), lower: (%d,%d), mass: %d\n", x1, y1, x1, y2, mass);
+	fprintf(fp, "# upper: (%d,%d), lower: (%d,%d), mass: %d\n", x1, y1, 
+		x2, y2, mass);
 	fprintf(fp, "%d %d\n%d\n", WIDTH, HEIGHT, 255);
 
 	for (x = 0; x < IMG_SIZE; x++)
@@ -235,7 +236,6 @@ static void motor_set_control_value(pid_data_t * pid, float cv)
 	speed_left = get_limited_speed(conf.w_speed + lcv);
 	speed_right = get_limited_speed(conf.w_speed - lcv);
 
-	//printf("cv: %4.1f, lcv: %4.1f, l: %4d, r: %4d s: %4d\n", cv, lcv, speed_left, speed_right, g_wall_speed);
 	motor_ctrl_set_speed(speed_left, speed_right);
 }
 
@@ -473,7 +473,8 @@ static void pid_controller(int mass, slice_t * upper, slice_t * lower,
 
 	// Send new speeds to motor controller
 	// (Each speed is limited to the interval 0-255 (unsigned 8-bit number))
-	motor_ctrl_set_speed(get_limited_speed(speed_l), get_limited_speed(speed_r));
+	motor_ctrl_set_speed(get_limited_speed(speed_l), 
+		get_limited_speed(speed_r));
 
 	//
 	// Add log entry
@@ -924,10 +925,6 @@ static void load_config()
 	wall_pid.D = conf.w_k_d;
 	wall_pid.max_sum_error = conf.w_max_sum_error;
 	wall_pid.set_point = conf.w_setpoint;
-
-	//printf("kp: %.2f, ki: %.2f, kd: %.2f\n", conf.k_p, conf.k_i, conf.k_d);
-	//printf("speed_straight: %d, speed_slow: %d\n", conf.speed_straight, conf.speed_slow);
-	//printf("mass_horizontal_upper: %d, mass_horizontal_upper: %d\n", conf.mass_horizontal_upper, conf.mass_horizontal_lower);
 }
 
 
@@ -970,7 +967,8 @@ static void * led_thread_fn(void * ptr)
 			{
 				mask = ~mask;
 				ioexp_led_set(mask);
-				delay(led_current_state == BLINK ? BLINK_DELAY : BLINK_FAST_DELAY);
+				delay(led_current_state == BLINK ? BLINK_DELAY : 
+					BLINK_FAST_DELAY);
 				break;
 			}
 			case KNIGHT_NIDER:
@@ -1118,9 +1116,13 @@ static void * shell_thread_fn(void * ptr)
 				
 				sprintf(filename, "img-%d.pgm", frame_counter);
 				printf("Dumping to %s\n", filename);
-				dump_to_pgm(buffer_copy, latest_upper_error.x, latest_upper_error.y, 
-					latest_lower_error.x, latest_upper_error.y, latest_upper_error.mass + latest_lower_error.mass, filename);
-				printf("%d, %d - %d, %d\n", latest_upper_error.x, latest_upper_error.y, latest_lower_error.x, latest_lower_error.y);
+				dump_to_pgm(buffer_copy, latest_upper_error.x, 
+					latest_upper_error.y, latest_lower_error.x, 
+					latest_lower_error.y, latest_upper_error.mass + 
+					latest_lower_error.mass, filename);
+				printf("%d, %d - %d, %d\n", latest_upper_error.x, 
+					latest_upper_error.y, latest_lower_error.x, 
+					latest_lower_error.y);
 
 				pthread_mutex_unlock(&buffer_mutex);
 			}

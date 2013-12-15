@@ -113,7 +113,7 @@ void optimum_thresholding(unsigned char * buffer, int start, int end,
 	start = INDEX(start);
 	end = INDEX(end);
 	thr += nice;
-	//thr = thr_lower;
+	
 	for (j = start; j < end; j++)
 	{
 		buffer[j] = buffer[j] < thr ? LINE : FLOOR;
