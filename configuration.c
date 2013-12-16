@@ -28,6 +28,11 @@ static cfg_opt_t opts[] =
 	CFG_FLOAT("k_p", 0, 0),
 	CFG_FLOAT("k_i", 0, 0),
 	CFG_FLOAT("k_d", 0, 0),
+
+	CFG_FLOAT("k_p_fast", 0, 0),
+	CFG_FLOAT("k_i_fast", 0, 0),
+	CFG_FLOAT("k_d_fast", 0, 0),
+
 	CFG_FLOAT("k_error", 0, 0),
 	CFG_FLOAT("k_error_diff", 0, 0),
 
@@ -85,6 +90,10 @@ int config_reload()
 	conf.k_p = cfg_getfloat(cfg, "k_p");
 	conf.k_i = cfg_getfloat(cfg, "k_i");
 	conf.k_d = cfg_getfloat(cfg, "k_d");
+	conf.k_p_fast = cfg_getfloat(cfg, "k_p_fast");
+	conf.k_i_fast = cfg_getfloat(cfg, "k_i_fast");
+	conf.k_d_fast = cfg_getfloat(cfg, "k_d_fast");
+
 	conf.k_error = cfg_getfloat(cfg, "k_error");
 	conf.k_error_diff = cfg_getfloat(cfg, "k_error_diff");
 

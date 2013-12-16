@@ -523,6 +523,7 @@ static void goto_wall(int limit_lower, int limit_upper)
 		dist_read(&front, NULL, NULL);
 		avg_num_add(&avg_front_dist, front);
 		dist_in_cm = get_dist_to_cm(avg_front_dist.avg);
+		printf("Dist front: %.2f\n", dist_in_cm);
 
 		if (dist_in_cm > limit_lower && dist_in_cm < limit_upper)
 		{
@@ -725,7 +726,7 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		case FOLLOW_LINE_SPEEDY:
 		{
 			pid_controller(mass, upper, lower, conf.speed_fast, conf.k_error, 
-				conf.k_p, conf.k_i, conf.k_d);
+				conf.k_p_fast, conf.k_i_fast, conf.k_d_fast);
 
 			settling_check();
 			if (mass > 23000)
@@ -756,7 +757,7 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		case STICK_TO_WALL:
 		{
 			// Goto wall and stop between 20 and 24 cm before the wall
-			goto_wall(18, 22);
+			goto_wall(15, 19);
 			printf("Found wall.\n");
 
 			// Rotate
@@ -792,7 +793,7 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 
 				straight_forward();
 				// TODO!!!
-				delay(2000); 
+				delay(1000); 
 
 				// Next state
 				beep();
@@ -844,8 +845,9 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 
 			if (d_f > 18 && d_f < 24)
 			{
+				printf("BRAKE!\n");
 				motor_ctrl_brake();
-				motor_ctrl_wait(200);
+				motor_ctrl_wait(500);
 				
 				rotate(ROTATE_RIGHT, P_90);
 				//motor_ctrl_wait(200);
@@ -1193,8 +1195,8 @@ int main(int argc, char ** argv)
 
 	// Allocate average number variables
 	avg_num_create(&avg_mass, AVG_MASS_CNT);
-	avg_num_create(&avg_front_dist, AVG_MASS_CNT);
-	avg_num_create(&avg_side_dist, AVG_MASS_CNT);
+	avg_num_create(&avg_front_dist, AVG_DIST_CNT);
+	avg_num_create(&avg_side_dist, AVG_DIST_CNT);
 
 	// Setup camera with fps, size etc. from configuration
 	setup_camera();	

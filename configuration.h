@@ -12,6 +12,8 @@ typedef struct conf {
 	float k_p, k_i, k_d;
 	float k_error, k_error_diff;
 
+	float k_p_fast, k_i_fast, k_d_fast;
+
 	// Wall PID
 	float w_k_p, w_k_i, w_k_d;
 	float w_diff_p;
