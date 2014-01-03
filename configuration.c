@@ -64,7 +64,13 @@ static cfg_opt_t opts[] =
 	CFG_SIMPLE_INT("w_max_error", &conf.w_max_error),
 	CFG_SIMPLE_INT("w_setpoint", &conf.w_setpoint),
 	CFG_SIMPLE_INT("w_speed", &conf.w_speed),
-	
+
+	CFG_SIMPLE_INT("dist_15_lower", &conf.dist_15_lower),
+	CFG_SIMPLE_INT("dist_15_upper", &conf.dist_15_upper),
+	CFG_SIMPLE_INT("dist_20_lower", &conf.dist_20_lower),
+	CFG_SIMPLE_INT("dist_20_upper", &conf.dist_20_upper),
+	CFG_SIMPLE_INT("dist_side_disappear_1", &conf.dist_side_disappear_1),
+	CFG_SIMPLE_INT("dist_side_disappear_2", &conf.dist_side_disappear_2),
 
 	CFG_END()
 };

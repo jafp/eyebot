@@ -43,6 +43,9 @@
 #define BLINK_DELAY				100
 #define BLINK_FAST_DELAY		50
 
+#define DIST_SAMPLE_DELAY		50
+#define DIST_VAR_LIM			4
+
 /**
  * Function prototypes
  */
@@ -71,7 +74,9 @@ typedef enum {
 	STRAIGHT_UNTIL_WALL_DISAPPEARS_2,
 	FOLLOW_WALL_1,
 	FOLLOW_WALL_2,
-	TRACK_COMPLETED
+	TRACK_COMPLETED,
+
+	FOLLOW_LINE_TEST
 } state_t;
 
 typedef enum {
@@ -162,6 +167,47 @@ static pid_data_t line_pid = {
 static pid_data_t wall_pid = {
 	.set_cv = motor_set_control_value
 };
+
+#define L 3
+float numbers[L] = {0.0};
+int idx = 0;
+
+void n_add(float n)
+{
+	numbers[idx++] = n;
+	if (idx == L)
+	{
+		idx = 0;
+	}
+}
+
+int n_is_var_between(float var)
+{
+	int i;
+	float max = numbers[0], min = numbers[0];
+	
+	for (i = 0; i < L; i++)
+	{
+		if (numbers[i] < min)
+		{
+			min = numbers[i];
+		}
+		if (numbers[i] > max)
+		{
+			max = numbers[i];
+		}
+	}
+	return (max - min) <= var;
+}
+
+void n_reset()
+{
+	int i;
+	for (i = 0; i < L; i++)
+	{
+		numbers[i] = 0;
+	}
+}
 
 /**
  *
@@ -507,36 +553,51 @@ static void pid_controller(int mass, slice_t * upper, slice_t * lower,
  */
 static void goto_wall(int limit_lower, int limit_upper)
 {
-	uint8_t front;
-	float dist_in_cm;
+	uint8_t front = 0;
+	float dist_in_cm = 0.0, prev_dist_in_cm = 0.0;
 
 	// Clear averager
 	avg_num_clear(&avg_front_dist);
 
 	// Go straight till we see the wall
 	straight_forward();
+	n_reset();
 
 	// Continue while measuring the distance to the wall
 	while (1)
 	{
 		// Read, average, and convert to cm
 		dist_read(&front, NULL, NULL);
-		avg_num_add(&avg_front_dist, front);
-		dist_in_cm = get_dist_to_cm(avg_front_dist.avg);
+		
+		dist_in_cm = get_dist_to_cm(front);
+		n_add(dist_in_cm);
 		printf("Dist front: %.2f\n", dist_in_cm);
 
-		if (dist_in_cm > limit_lower && dist_in_cm < limit_upper)
+		//if (prev_dist_in_cm != 0 && abs(dist_in_cm - prev_dist_in_cm) > DIST_VAR_LIM)
+		//{
+		//	printf("Skip!\n");
+		//}
+		//else
+		if (n_is_var_between(6))
 		{
-			// Brake and disable the front distance sensor
-			motor_ctrl_brake();
-			motor_ctrl_wait(500);
-			beep();
+			if (dist_in_cm > limit_lower && dist_in_cm < limit_upper)
+			{
+				// Brake and disable the front distance sensor
+				motor_ctrl_brake();
+				motor_ctrl_wait(500);
+				beep();
 
-			printf("Found wall (%.2f). Braking and disabling the distance sensor\n", 
-				dist_in_cm);
-			break;
+				printf("Found wall (%.2f). Braking and disabling the distance sensor\n", 
+					dist_in_cm);
+				break;
+			}
 		}
-		delay(33);
+		else
+		{
+			printf("Too big variance!\n");
+		}
+		prev_dist_in_cm = dist_in_cm;
+		delay(DIST_SAMPLE_DELAY);
 	}
 }
 
@@ -552,6 +613,8 @@ static void goto_wall(int limit_lower, int limit_upper)
  */
 static int update_loop(int mass, slice_t * upper, slice_t * lower)
 {
+	static float kp, ki, kd;
+	static int speed;
 	switch (current_state)
 	{	
 		case CALIBRATE:
@@ -641,7 +704,8 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 			rotate(ROTATE_LEFT, P_90);
 
 			// Goto wall
-			goto_wall(18, 22);
+			//straight_forward(); delay(500);
+			goto_wall(conf.dist_20_lower, conf.dist_20_upper);
 
 			// Rotate 135 degress
 			rotate(ROTATE_RIGHT, P_135);
@@ -660,7 +724,6 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 			led_current_state = BLINK_FAST;
 			current_state = FROM_WALL_TO_LINE;
 			printf("State: From wall to line\n");
-
 			printf("Going into camera mode again (from wall to line state)\n");
 
 			break;
@@ -714,6 +777,10 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 				settling_set(30);
 				led_current_state = OFF;
 				current_state = FOLLOW_LINE_SPEEDY;
+				kp = conf.k_p;
+				ki = conf.k_i;
+				kd = conf.k_d;
+				speed = conf.speed_normal;
 			}
 			
 			break;
@@ -725,10 +792,16 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 		 */
 		case FOLLOW_LINE_SPEEDY:
 		{
-			pid_controller(mass, upper, lower, conf.speed_fast, conf.k_error, 
-				conf.k_p_fast, conf.k_i_fast, conf.k_d_fast);
+			pid_controller(mass, upper, lower, speed, conf.k_error, 
+				kp, ki, kd);
 
 			settling_check();
+			
+			kp = conf.k_p_fast;
+			ki = conf.k_i_fast;
+			kd = conf.k_d_fast;
+			speed = conf.speed_fast;
+
 			if (mass > 23000)
 			{
 				printf("Found end (%d)\n", mass);
@@ -756,8 +829,9 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 
 		case STICK_TO_WALL:
 		{
-			// Goto wall and stop between 20 and 24 cm before the wall
-			goto_wall(15, 19);
+			// Delay to ensure we are inside the range of the wall sensor (30 cm)
+			//straight_forward(); delay(1500); 
+			goto_wall(conf.dist_20_lower, conf.dist_20_upper);
 			printf("Found wall.\n");
 
 			// Rotate
@@ -767,6 +841,7 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 
 			// Go forward
 			straight_forward();
+			delay(500);
 
 			// Next state
 			beep();
@@ -781,7 +856,7 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 			float dist_side;
 			dist_side = get_dist_side_rear();
 
-			if (dist_side > 14)
+			if (dist_side > conf.dist_side_disappear_1)
 			{
 				motor_ctrl_brake();
 				motor_ctrl_wait(200);
@@ -809,7 +884,7 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 			float dist;
 			dist = get_dist_side_rear();
 
-			if (dist > 20)
+			if (dist > conf.dist_side_disappear_2)
 			{
 				motor_ctrl_brake();
 				motor_ctrl_wait(200);
@@ -843,13 +918,13 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 			d_2 = get_dist_to_cm(dist_2);
 			d_f = get_dist_to_cm(dist_f);
 
-			if (d_f > 18 && d_f < 24)
+			if (d_f > conf.dist_20_lower && d_f < conf.dist_20_upper)
 			{
 				printf("BRAKE!\n");
 				motor_ctrl_brake();
 				motor_ctrl_wait(500);
 				
-				rotate(ROTATE_RIGHT, P_90);
+				rotate(ROTATE_RIGHT, P_90 + 8);
 				//motor_ctrl_wait(200);
 
 				goto_speed_mode();
@@ -870,7 +945,8 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 			float pv;
 			dist_readings_t dists = dist_read_all();
 
-			if (dists.front > 14 && dists.front < 18)
+			// Stop some distance from the wall!
+			if (dists.front > conf.dist_20_lower && dists.front < conf.dist_20_upper)
 			{
 				motor_ctrl_brake();
 				motor_ctrl_wait(200);
@@ -907,6 +983,13 @@ static int update_loop(int mass, slice_t * upper, slice_t * lower)
 
 			break;
 		}
+
+		case FOLLOW_LINE_TEST:
+		{
+			pid_controller(mass, upper, lower, conf.speed_normal, conf.k_error
+				, conf.k_p, conf.k_i, conf.k_d);
+		}
+
 		default: 
 		{
 
@@ -1067,6 +1150,10 @@ static void * shell_thread_fn(void * ptr)
 				beep_state_change();
 				current_state = STICK_TO_WALL;
 			}
+			else if (strcmp(buffer, "st5") == 0)
+			{
+				current_state = FOLLOW_LINE_TEST;
+			}
 			/**
 			 * Stop the robot and return to waiting state.
 			 */
@@ -1131,19 +1218,11 @@ static void * shell_thread_fn(void * ptr)
 
 			else if (strcmp(buffer, "wall") == 0)
 			{	
-				// Enable side distance sensor
-				//dist_enable(DIST_SENSOR_SIDE);
-
-				// Reload config and reset variables
-				reset();
-				config_reload();
-				pid_reset(&wall_pid);
-				printf("kp: %f, ki: %f, kd: %f\n", wall_pid.P, wall_pid.I, 
-					wall_pid.D);
-
-				current_state = STICK_TO_WALL;
+				straight_forward();
+				//delay(1500);
+				goto_wall(conf.dist_20_lower, conf.dist_20_upper);
+				beep();
 			}
-
 			else
 			{
 				printf("Command not found!\n");
@@ -1238,7 +1317,8 @@ int main(int argc, char ** argv)
 	// Ready! 
 	//
 
-	//pthread_create(&led_thread, NULL, led_thread_fn, NULL);
+led_current_state = KNIGHT_NIDER;
+	pthread_create(&led_thread, NULL, led_thread_fn, NULL);
 
 	// Create the main processing thread (camera and update loop)
 	pthread_create(&processing_thread, NULL, processing_thread_fn, NULL);

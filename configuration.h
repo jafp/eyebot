@@ -29,6 +29,10 @@ typedef struct conf {
 	int slice_upper_start, slice_upper_end;
 	int slice_lower_start, slice_lower_end;
 
+	int dist_15_upper, dist_15_lower;
+	int dist_20_upper, dist_20_lower;
+	int dist_side_disappear_1, dist_side_disappear_2;
+
 } conf_t;
 
 
